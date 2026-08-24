@@ -6,8 +6,15 @@
 #define SUBWAY_RENDERER_H
 
 #include <glad/glad.h>
+#include <SDL2/SDL.h>
 
 class Renderer {
+
+    public:
+    Renderer();
+    ~Renderer();
+    int initSDL();
+    void render();
 };
 
 

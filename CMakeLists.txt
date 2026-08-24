@@ -8,8 +8,8 @@ add_executable(subway
         src/Game.cpp
         include/Game.h
         include/Game.h
-        Renderer.cpp
-        Renderer.h)
+        src/Renderer.cpp
+        include/Renderer.h)
 
 target_include_directories(subway
                            PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
