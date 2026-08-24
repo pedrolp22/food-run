@@ -1,11 +1,6 @@
-#include "Renderer.h"
+#include "Game.h"
 
 int main() {
-    Renderer renderer;
-    if (renderer.initSDL() != 0) {
-        return 1;
-    }
-
-    renderer.run();
-    return 0;
+    Game game;
+    return game.run();
 }

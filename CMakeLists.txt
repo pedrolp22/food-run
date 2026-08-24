@@ -16,6 +16,7 @@ add_executable(subway
         main.cpp
         src/Game.cpp
         include/Game.h
+        include/GameConfig.h
         src/Renderer.cpp
         include/Renderer.h)
 

@@ -2,14 +2,13 @@
 
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <cmath>
 #include <cstddef>
-#include <iomanip>
 #include <iostream>
-#include <sstream>
 
 #include <glad/glad.h>
+
+using namespace GameConfig;
 
 namespace {
 constexpr int kWindowWidth = 1280;
@@ -17,61 +16,24 @@ constexpr int kWindowHeight = 720;
 constexpr int kOpenGLMajorVersion = 4;
 constexpr int kOpenGLMinorVersion = 6;
 constexpr int kVsyncEnabled = 1;
-constexpr const char* kWindowTitle = "Subway Money";
-
-constexpr int kLaneCount = 5;
-constexpr std::array<float, kLaneCount> kLanePositions = {-2.2f, 0.0f, 2.2f};
-constexpr float kPlayerZ = 3.0f;
-constexpr float kPlayerScale = 0.9f;
-constexpr float kLaneChangeSpeed = 12.0f;
-constexpr float kInitialSpeed = 10.0f;
-constexpr float kMinSpeed = 4.0f;
-constexpr float kMaxSpeed = 18.0f;
-constexpr int kMaxHealth = 3;
-constexpr float kSpawnZ = -65.0f;
-constexpr float kDespawnZ = 8.0f;
-constexpr float kCollisionZRange = 0.95f;
-constexpr float kCollisionXRange = 0.85f;
-constexpr float kLaneSegmentLength = 12.0f;
-constexpr float kLaneStartZ = -86.0f;
-constexpr int kLaneSegmentCount = 10;
 constexpr float kPi = 3.14159265358979323846f;
 
-struct Vec3 {
-    float x;
-    float y;
-    float z;
-};
+struct Vec3 { float x; float y; float z; };
 
-struct Mat4 {
-    std::array<float, 16> values{};
-};
+struct Mat4 { std::array<float, 16> values{}; };
 
 bool setGLAttribute(SDL_GLattr attribute, int value, const char* name) {
-    if (SDL_GL_SetAttribute(attribute, value) == 0) {
-        return true;
-    }
-
+    if (SDL_GL_SetAttribute(attribute, value) == 0) { return true; }
     std::cerr << "Failed to set " << name << ": " << SDL_GetError() << '\n';
     return false;
 }
 
-float laneToX(int lane) {
-    const int clampedLane = std::clamp(lane, 0, kLaneCount - 1);
-    return kLanePositions[static_cast<std::size_t>(clampedLane)];
-}
+float laneToX(int lane) { const int clampedLane = std::clamp(lane, 0, kLaneCount - 1); return kLanePositions[static_cast<std::size_t>(clampedLane)]; }
 
-float radians(float degrees) {
-    return degrees * kPi / 180.0f;
-}
+float radians(float degrees) { return degrees * kPi / 180.0f;}
 
-Vec3 operator-(const Vec3& left, const Vec3& right) {
-    return {left.x - right.x, left.y - right.y, left.z - right.z};
-}
-
-float dot(const Vec3& left, const Vec3& right) {
-    return left.x * right.x + left.y * right.y + left.z * right.z;
-}
+Vec3 operator-(const Vec3& left, const Vec3& right) { return {left.x - right.x, left.y - right.y, left.z - right.z}; }
+    float dot(const Vec3& left, const Vec3& right) { return left.x * right.x + left.y * right.y + left.z * right.z; }
 
 Vec3 cross(const Vec3& left, const Vec3& right) {
     return {
@@ -83,9 +45,7 @@ Vec3 cross(const Vec3& left, const Vec3& right) {
 
 Vec3 normalize(const Vec3& value) {
     const float length = std::sqrt(dot(value, value));
-    if (length <= 0.0001f) {
-        return {0.0f, 0.0f, 0.0f};
-    }
+    if (length <= 0.0001f) { return {0.0f, 0.0f, 0.0f}; }
 
     return {value.x / length, value.y / length, value.z / length};
 }
@@ -174,9 +134,7 @@ unsigned int compileShader(unsigned int shaderType, const char* source, const ch
 
     int success = 0;
     glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
-    if (success != 0) {
-        return shader;
-    }
+    if (success != 0) { return shader; }
 
     std::array<char, 1024> infoLog{};
     glGetShaderInfoLog(shader, static_cast<int>(infoLog.size()), nullptr, infoLog.data());
@@ -190,26 +148,13 @@ Renderer::Renderer()
     : window_(nullptr),
       glContext_(nullptr),
       sdlInitialized_(false),
-      running_(false),
-      gameOver_(false),
       cubeVao_(0),
       cubeVbo_(0),
       shaderProgram_(0),
       mvpUniform_(-1),
       colorUniform_(-1),
       drawableWidth_(kWindowWidth),
-      drawableHeight_(kWindowHeight),
-      targetLane_(1),
-      playerX_(laneToX(targetLane_)),
-      speed_(kInitialSpeed),
-      spawnTimer_(1.0f),
-      roadScroll_(0.0f),
-      titleUpdateTimer_(0.0f),
-      scoreAccumulator_(0.0f),
-      score_(0),
-      health_(kMaxHealth),
-      purpleStreak_(0),
-      randomEngine_(std::random_device{}()) {
+      drawableHeight_(kWindowHeight){
 }
 
 Renderer::~Renderer() {
@@ -217,18 +162,10 @@ Renderer::~Renderer() {
 }
 
 int Renderer::initSDL() {
-    if (window_ && glContext_) {
-        return 0;
-    }
+    if(window_ && glContext_) { return 0; }
+    if (window_ || glContext_ || sdlInitialized_) { shutdown(); }
 
-    if (window_ || glContext_ || sdlInitialized_) {
-        shutdown();
-    }
-
-    if (SDL_Init(SDL_INIT_VIDEO) < 0) {
-        std::cerr << "SDL initialization error: " << SDL_GetError() << '\n';
-        return -1;
-    }
+    if(SDL_Init(SDL_INIT_VIDEO) < 0) { std::cerr << "SDL initialization error: " << SDL_GetError() << '\n'; return -1; }
     sdlInitialized_ = true;
 
     if (!setOpenGLAttributes() || !createWindow() || !createOpenGLContext() || !initializeGlad() || !initializeGraphics()) {
@@ -236,45 +173,33 @@ int Renderer::initSDL() {
         return -1;
     }
 
-    if (SDL_GL_SetSwapInterval(kVsyncEnabled) != 0) {
-        std::cerr << "VSync setup warning: " << SDL_GetError() << '\n';
-    }
+    if (SDL_GL_SetSwapInterval(kVsyncEnabled) != 0) { std::cerr << "VSync setup warning: " << SDL_GetError() << '\n'; }
 
-    SDL_GL_GetDrawableSize(window_, &drawableWidth_, &drawableHeight_);
-    glViewport(0, 0, drawableWidth_, drawableHeight_);
-
-    resetGame();
+    resizeViewport();
     return 0;
 }
 
-void Renderer::run() {
-    using Clock = std::chrono::steady_clock;
+void Renderer::resizeViewport() {
+    if(!window_){ return; }
 
-    running_ = true;
-    auto previousFrame = Clock::now();
-
-    while (running_) {
-        const auto currentFrame = Clock::now();
-        const std::chrono::duration<float> elapsed = currentFrame - previousFrame;
-        previousFrame = currentFrame;
-
-        const float deltaTime = std::min(elapsed.count(), 0.05f);
-        handleEvents();
-        update(deltaTime);
-        render();
-    }
+    SDL_GL_GetDrawableSize(window_, &drawableWidth_, &drawableHeight_);
+    glViewport(0, 0, drawableWidth_, drawableHeight_);
 }
 
-void Renderer::render() {
-    if (!window_ || shaderProgram_ == 0) {
-        return;
-    }
+void Renderer::setWindowTitle(const std::string& title) const {
+    if(!window_){ return; }
+
+    SDL_SetWindowTitle(window_, title.c_str());
+}
+
+void Renderer::render(float playerX, float roadScroll, const std::vector<Entity>& entities) {
+    if(!window_ || shaderProgram_ == 0) { return; }
 
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glUseProgram(shaderProgram_);
     glBindVertexArray(cubeVao_);
 
-    drawWorld();
+    drawWorld(playerX, roadScroll, entities);
 
     glBindVertexArray(0);
     glUseProgram(0);
@@ -302,9 +227,7 @@ bool Renderer::createWindow() {
         SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE
     );
 
-    if (window_) {
-        return true;
-    }
+    if(window_) { return true; }
 
     std::cerr << "Window creation error: " << SDL_GetError() << '\n';
     return false;
@@ -312,23 +235,15 @@ bool Renderer::createWindow() {
 
 bool Renderer::createOpenGLContext() {
     glContext_ = SDL_GL_CreateContext(window_);
-    if (!glContext_) {
-        std::cerr << "OpenGL context error: " << SDL_GetError() << '\n';
-        return false;
-    }
-
+    if (!glContext_) { std::cerr << "OpenGL context error: " << SDL_GetError() << '\n'; return false; }
     if (SDL_GL_MakeCurrent(window_, glContext_) != 0) {
-        std::cerr << "Failed to make OpenGL context current: " << SDL_GetError() << '\n';
-        return false;
-    }
+        std::cerr << "Failed to make OpenGL context current: " << SDL_GetError() << '\n'; return false; }
 
     return true;
 }
 
 bool Renderer::initializeGlad() const {
-    if (gladLoadGLLoader(reinterpret_cast<GLADloadproc>(SDL_GL_GetProcAddress)) != 0) {
-        return true;
-    }
+    if(gladLoadGLLoader(reinterpret_cast<GLADloadproc>(SDL_GL_GetProcAddress)) != 0) { return true; }
 
     std::cerr << "Failed to initialize GLAD\n";
     return false;
@@ -348,32 +263,23 @@ layout (location = 0) in vec3 aPosition;
 
 uniform mat4 uMvp;
 
-void main() {
-    gl_Position = uMvp * vec4(aPosition, 1.0);
-}
+void main() { gl_Position = uMvp * vec4(aPosition, 1.0); }
 )";
 
     constexpr const char* fragmentShaderSource = R"(
 #version 330 core
-out vec4 FragColor;
 
+out vec4 FragColor;
 uniform vec3 uColor;
 
-void main() {
-    FragColor = vec4(uColor, 1.0);
-}
+void main() { FragColor = vec4(uColor, 1.0); }
 )";
 
     const unsigned int vertexShader = compileShader(GL_VERTEX_SHADER, vertexShaderSource, "Vertex");
-    if (vertexShader == 0) {
-        return false;
-    }
+    if(vertexShader == 0) { return false; }
 
     const unsigned int fragmentShader = compileShader(GL_FRAGMENT_SHADER, fragmentShaderSource, "Fragment");
-    if (fragmentShader == 0) {
-        glDeleteShader(vertexShader);
-        return false;
-    }
+    if(fragmentShader == 0) { glDeleteShader(vertexShader); return false; }
 
     shaderProgram_ = glCreateProgram();
     glAttachShader(shaderProgram_, vertexShader);
@@ -385,22 +291,18 @@ void main() {
 
     int success = 0;
     glGetProgramiv(shaderProgram_, GL_LINK_STATUS, &success);
-    if (success == 0) {
+    if(success == 0) {
         std::array<char, 1024> infoLog{};
         glGetProgramInfoLog(shaderProgram_, static_cast<int>(infoLog.size()), nullptr, infoLog.data());
         std::cerr << "Shader program linking failed: " << infoLog.data() << '\n';
-        glDeleteProgram(shaderProgram_);
-        shaderProgram_ = 0;
-        return false;
+        glDeleteProgram(shaderProgram_); shaderProgram_ = 0; return false;
     }
 
     mvpUniform_ = glGetUniformLocation(shaderProgram_, "uMvp");
     colorUniform_ = glGetUniformLocation(shaderProgram_, "uColor");
     if (mvpUniform_ < 0 || colorUniform_ < 0) {
         std::cerr << "Shader program is missing required uniforms\n";
-        glDeleteProgram(shaderProgram_);
-        shaderProgram_ = 0;
-        return false;
+        glDeleteProgram(shaderProgram_); shaderProgram_ = 0; return false;
     }
 
     return true;
@@ -430,19 +332,12 @@ bool Renderer::createCubeMesh() {
     glGenVertexArrays(1, &cubeVao_);
     glGenBuffers(1, &cubeVbo_);
 
-    if (cubeVao_ == 0 || cubeVbo_ == 0) {
-        std::cerr << "Failed to create cube mesh buffers\n";
-        return false;
-    }
+    if(cubeVao_ == 0 || cubeVbo_ == 0) { std::cerr << "Failed to create cube mesh buffers\n"; return false; }
 
     glBindVertexArray(cubeVao_);
     glBindBuffer(GL_ARRAY_BUFFER, cubeVbo_);
-    glBufferData(
-        GL_ARRAY_BUFFER,
-        static_cast<GLsizeiptr>(cubeVertices.size() * sizeof(float)),
-        cubeVertices.data(),
-        GL_STATIC_DRAW
-    );
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(cubeVertices.size() * sizeof(float)),
+                       cubeVertices.data(), GL_STATIC_DRAW );
 
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * static_cast<int>(sizeof(float)), nullptr);
     glEnableVertexAttribArray(0);
@@ -453,202 +348,7 @@ bool Renderer::createCubeMesh() {
     return true;
 }
 
-void Renderer::handleEvents() {
-    SDL_Event event;
-    while (SDL_PollEvent(&event) != 0) {
-        if (event.type == SDL_QUIT) {
-            running_ = false;
-            continue;
-        }
-
-        if (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
-            SDL_GL_GetDrawableSize(window_, &drawableWidth_, &drawableHeight_);
-            glViewport(0, 0, drawableWidth_, drawableHeight_);
-            continue;
-        }
-
-        if (event.type != SDL_KEYDOWN || event.key.repeat != 0) {
-            continue;
-        }
-
-        switch (event.key.keysym.sym) {
-            case SDLK_ESCAPE:
-                running_ = false;
-                break;
-            case SDLK_LEFT:
-            case SDLK_a:
-                if (!gameOver_) {
-                    targetLane_ = std::max(0, targetLane_ - 1);
-                }
-                break;
-            case SDLK_RIGHT:
-            case SDLK_d:
-                if (!gameOver_) {
-                    targetLane_ = std::min(kLaneCount - 1, targetLane_ + 1);
-                }
-                break;
-            case SDLK_r:
-                resetGame();
-                break;
-            default:
-                break;
-        }
-    }
-}
-
-void Renderer::update(float deltaTime) {
-    if (gameOver_) {
-        return;
-    }
-
-    updatePlayer(deltaTime);
-    updateWorld(deltaTime);
-    updateEntities(deltaTime);
-    updateCollisions();
-
-    scoreAccumulator_ += speed_ * deltaTime * 3.0f;
-    const int distancePoints = static_cast<int>(scoreAccumulator_);
-    if (distancePoints > 0) {
-        score_ += distancePoints;
-        scoreAccumulator_ -= static_cast<float>(distancePoints);
-    }
-
-    titleUpdateTimer_ -= deltaTime;
-    if (titleUpdateTimer_ <= 0.0f) {
-        updateWindowTitle();
-        titleUpdateTimer_ = 0.15f;
-    }
-}
-
-void Renderer::updatePlayer(float deltaTime) {
-    const float targetX = laneToX(targetLane_);
-    const float blend = std::min(1.0f, kLaneChangeSpeed * deltaTime);
-    playerX_ += (targetX - playerX_) * blend;
-}
-
-void Renderer::updateWorld(float deltaTime) {
-    roadScroll_ = std::fmod(roadScroll_ + speed_ * deltaTime, kLaneSegmentLength);
-    if (roadScroll_ < 0.0f) {
-        roadScroll_ += kLaneSegmentLength;
-    }
-
-    spawnTimer_ -= deltaTime;
-    if (spawnTimer_ <= 0.0f) {
-        spawnEntity();
-
-        std::uniform_real_distribution<float> delayDistribution(0.55f, 1.15f);
-        spawnTimer_ = delayDistribution(randomEngine_);
-    }
-}
-
-void Renderer::updateEntities(float deltaTime) {
-    for (Entity& entity : entities_) {
-        entity.z += speed_ * deltaTime;
-    }
-
-    entities_.erase(
-        std::remove_if(
-            entities_.begin(),
-            entities_.end(),
-            [](const Entity& entity) {
-                return entity.z > kDespawnZ;
-            }
-        ),
-        entities_.end()
-    );
-}
-
-void Renderer::updateCollisions() {
-    for (auto entity = entities_.begin(); entity != entities_.end();) {
-        const float entityX = laneToX(entity->lane);
-        const bool touchesPlayer = std::abs(entity->z - kPlayerZ) <= kCollisionZRange &&
-                                   std::abs(entityX - playerX_) <= kCollisionXRange;
-
-        if (!touchesPlayer) {
-            ++entity;
-            continue;
-        }
-
-        switch (entity->type) {
-            case EntityType::Obstacle:
-                health_ -= 1;
-                speed_ = std::max(kMinSpeed, speed_ - 2.5f);
-                if (health_ <= 0) {
-                    gameOver_ = true;
-                }
-                break;
-            case EntityType::SlowCollectible:
-                purpleStreak_ += 1;
-                speed_ = std::max(kMinSpeed, speed_ - 1.8f);
-                if (purpleStreak_ >= 3) {
-                    gameOver_ = true;
-                }
-                break;
-            case EntityType::ScoreCollectible:
-                score_ += 100;
-                health_ = std::min(kMaxHealth, health_ + 1);
-                purpleStreak_ = 0;
-                speed_ = std::min(kMaxSpeed, speed_ + 1.5f);
-                break;
-        }
-
-        entity = entities_.erase(entity);
-        updateWindowTitle();
-    }
-}
-
-void Renderer::spawnEntity() {
-    std::uniform_int_distribution<int> laneDistribution(0, kLaneCount - 1);
-    std::uniform_real_distribution<float> typeDistribution(0.0f, 1.0f);
-
-    const float typeRoll = typeDistribution(randomEngine_);
-    EntityType type = EntityType::Obstacle;
-    if (typeRoll > 0.78f) {
-        type = EntityType::ScoreCollectible;
-    } else if (typeRoll > 0.56f) {
-        type = EntityType::SlowCollectible;
-    }
-
-    entities_.push_back({type, laneDistribution(randomEngine_), kSpawnZ});
-}
-
-void Renderer::resetGame() {
-    gameOver_ = false;
-    targetLane_ = 1;
-    playerX_ = laneToX(targetLane_);
-    speed_ = kInitialSpeed;
-    spawnTimer_ = 1.0f;
-    roadScroll_ = 0.0f;
-    titleUpdateTimer_ = 0.0f;
-    scoreAccumulator_ = 0.0f;
-    score_ = 0;
-    health_ = kMaxHealth;
-    purpleStreak_ = 0;
-    entities_.clear();
-    updateWindowTitle();
-}
-
-void Renderer::updateWindowTitle() {
-    if (!window_) {
-        return;
-    }
-
-    std::ostringstream title;
-    title << kWindowTitle;
-
-    if (gameOver_) {
-        title << " | Game Over - Press R | Score " << score_;
-    } else {
-        title << " | Score " << score_
-              << " | Health " << health_
-              << " | Speed " << std::fixed << std::setprecision(1) << speed_
-              << " | Purple " << purpleStreak_ << "/3";
-    }
-
-    SDL_SetWindowTitle(window_, title.str().c_str());
-}
-
-void Renderer::drawWorld() const {
+void Renderer::drawWorld(float playerX, float roadScroll, const std::vector<Entity>& entities) const {
     constexpr Color laneColor = {0.17f, 0.19f, 0.21f};
     constexpr Color alternateLaneColor = {0.13f, 0.15f, 0.17f};
     constexpr Color dividerColor = {0.95f, 0.85f, 0.22f};
@@ -657,7 +357,7 @@ void Renderer::drawWorld() const {
     constexpr Color slowCollectibleColor = {0.62f, 0.18f, 0.95f};
     constexpr Color scoreCollectibleColor = {0.04f, 0.85f, 0.30f};
 
-    const float scrollOffset = std::fmod(roadScroll_, kLaneSegmentLength);
+    const float scrollOffset = std::fmod(roadScroll, kLaneSegmentLength);
     for (int segment = 0; segment < kLaneSegmentCount; ++segment) {
         const float z = kLaneStartZ + scrollOffset + static_cast<float>(segment) * kLaneSegmentLength;
         for (int lane = 0; lane < kLaneCount; ++lane) {
@@ -671,9 +371,9 @@ void Renderer::drawWorld() const {
         }
     }
 
-    drawCube({playerX_, kPlayerScale * 0.5f, kPlayerZ, kPlayerScale, kPlayerScale, kPlayerScale}, playerColor);
+    drawCube({playerX, kPlayerScale * 0.5f, kPlayerZ, kPlayerScale, kPlayerScale, kPlayerScale}, playerColor);
 
-    for (const Entity& entity : entities_) {
+    for(const Entity& entity : entities){
         switch (entity.type) {
             case EntityType::Obstacle:
                 drawCube({laneToX(entity.lane), 0.48f, entity.z, 0.95f, 0.95f, 0.95f}, obstacleColor);
@@ -706,38 +406,16 @@ void Renderer::drawCube(const Transform& transform, const Color& color) const {
     glDrawArrays(GL_TRIANGLES, 0, 36);
 }
 
-void Renderer::shutdownGraphics() {
-    if (cubeVbo_ != 0) {
-        glDeleteBuffers(1, &cubeVbo_);
-        cubeVbo_ = 0;
-    }
-
-    if (cubeVao_ != 0) {
-        glDeleteVertexArrays(1, &cubeVao_);
-        cubeVao_ = 0;
-    }
-
-    if (shaderProgram_ != 0) {
-        glDeleteProgram(shaderProgram_);
-        shaderProgram_ = 0;
-    }
+void Renderer::shutdownGraphics(){
+    if(cubeVbo_!=0) { glDeleteBuffers(1, &cubeVbo_); cubeVbo_ = 0; }
+    if(cubeVao_!=0){ glDeleteVertexArrays(1, &cubeVao_); cubeVao_ = 0; }
+    if(shaderProgram_!=0){ glDeleteProgram(shaderProgram_); shaderProgram_ = 0; }
 }
 
 void Renderer::shutdown() {
     shutdownGraphics();
 
-    if (glContext_) {
-        SDL_GL_DeleteContext(glContext_);
-        glContext_ = nullptr;
-    }
-
-    if (window_) {
-        SDL_DestroyWindow(window_);
-        window_ = nullptr;
-    }
-
-    if (sdlInitialized_) {
-        SDL_QuitSubSystem(SDL_INIT_VIDEO);
-        sdlInitialized_ = false;
-    }
+    if(glContext_){ SDL_GL_DeleteContext(glContext_); glContext_ = nullptr; }
+    if(window_){ SDL_DestroyWindow(window_); window_ = nullptr; }
+    if(sdlInitialized_){ SDL_QuitSubSystem(SDL_INIT_VIDEO); sdlInitialized_ = false; }
 }
