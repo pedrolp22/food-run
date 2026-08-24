@@ -1,6 +1,11 @@
-#include <iostream>
+#include "Renderer.h"
 
 int main() {
-    std::cout << "Hello, World!" << std::endl;
+    Renderer renderer;
+    if (renderer.initSDL() != 0) {
+        return 1;
+    }
+
+    renderer.run();
     return 0;
 }
