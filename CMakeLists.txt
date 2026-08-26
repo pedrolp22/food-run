@@ -7,7 +7,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(SDL2 REQUIRED)
 
 add_library(glad STATIC
-        external/glad/glad.c)
+        external/glad/glad.c
+        external/stb_image_impl.c)
 
 target_include_directories(glad
         PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/external)
@@ -22,6 +23,8 @@ add_executable(subway
 
 target_include_directories(subway
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+target_compile_definitions(subway PRIVATE ASSETS_DIR="${CMAKE_SOURCE_DIR}/assets")
 
 target_link_libraries(subway
         PRIVATE glad)

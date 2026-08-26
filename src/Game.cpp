@@ -1,7 +1,3 @@
-//
-// Created by pedroleonardo on 19/08/2026.
-//
-
 #include "Game.h"
 
 #include <SDL2/SDL.h>
@@ -28,7 +24,9 @@ Game::Game()
       score_(0),
       health_(kMaxHealth),
       purpleStreak_(0),
-      randomEngine_(std::random_device{}()) {
+      randomEngine_(std::random_device{}()),
+      gameTime_(0.0f),
+      accumulator_(0.0f) {
 }
 
 int Game::run() {
@@ -45,10 +43,18 @@ int Game::run() {
         const std::chrono::duration<float> elapsed = currentFrame - previousFrame;
         previousFrame = currentFrame;
 
-        const float deltaTime = std::min(elapsed.count(), 0.05f);
+        const float frameTime = std::min(elapsed.count(), 0.05f);
+        accumulator_ += frameTime;
+
         handleEvents();
-        update(deltaTime);
-        renderer_.render(playerX_, roadScroll_, entities_);
+
+        constexpr float fixedStep = 1.0f / 60.0f;
+        while(accumulator_ >= fixedStep) {
+            update(fixedStep);
+            accumulator_ -= fixedStep;
+        }
+
+        renderer_.render(playerX_, roadScroll_, gameTime_, entities_);
     }
 
     return 0;
@@ -78,6 +84,8 @@ void Game::handleEvents() {
 
 void Game::update(float deltaTime) {
     if(gameOver_) { return; }
+
+    gameTime_ += deltaTime;
 
     updatePlayer(deltaTime);
     updateWorld(deltaTime);
@@ -164,7 +172,14 @@ void Game::spawnEntity() {
     if(typeRoll > 0.78f) { type = Renderer::EntityType::ScoreCollectible; }
     else if(typeRoll > 0.56f) { type = Renderer::EntityType::SlowCollectible; }
 
-    entities_.push_back({type, laneDistribution(randomEngine_), kSpawnZ});
+    Renderer::Entity entity;
+    entity.type = type;
+    entity.lane = laneDistribution(randomEngine_);
+    entity.z = kSpawnZ;
+    entity.spawnTime = gameTime_;
+    entity.textureIndex = (type == Renderer::EntityType::ScoreCollectible)
+        ? std::uniform_int_distribution<int>(0, 2)(randomEngine_) : 0;
+    entities_.push_back(entity);
 }
 
 void Game::resetGame() {
@@ -179,6 +194,8 @@ void Game::resetGame() {
     score_ = 0;
     health_ = kMaxHealth;
     purpleStreak_ = 0;
+    gameTime_ = 0.0f;
+    accumulator_ = 0.0f;
     entities_.clear();
     updateWindowTitle();
 }

@@ -1,7 +1,3 @@
-//
-// Created by pedroleonardo on 19/08/2026.
-//
-
 #ifndef SUBWAY_GAMECONFIG_H
 #define SUBWAY_GAMECONFIG_H
 

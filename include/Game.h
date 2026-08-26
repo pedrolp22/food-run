@@ -47,6 +47,8 @@ private:
 
     std::vector<Renderer::Entity> entities_;
     std::mt19937 randomEngine_;
+    float gameTime_;
+    float accumulator_;
 };
 
 
