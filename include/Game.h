@@ -46,6 +46,7 @@ private:
     int purpleStreak_;
 
     std::vector<Renderer::Entity> entities_;
+    std::vector<Renderer::CollectEffect> collectEffects_;
     std::mt19937 randomEngine_;
     float gameTime_;
     float accumulator_;

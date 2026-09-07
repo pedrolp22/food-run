@@ -25,6 +25,10 @@ namespace GameConfig {
     constexpr float kLaneSegmentLength = 12.0f;
     constexpr float kLaneStartZ = -86.0f;
     constexpr int kLaneSegmentCount = 10;
+
+    constexpr bool kTriPointFiltering = true;
+    constexpr float kWorldCurvature = 0.0008f;
+    constexpr float kRoadSway = 0.7f;
 }
 
 #endif //SUBWAY_GAMECONFIG_H
