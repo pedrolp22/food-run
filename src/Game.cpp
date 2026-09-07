@@ -54,7 +54,7 @@ int Game::run() {
             accumulator_ -= fixedStep;
         }
 
-        renderer_.render(playerX_, roadScroll_, gameTime_, entities_);
+        renderer_.render(playerX_, roadScroll_, gameTime_, entities_, collectEffects_);
     }
 
     return 0;
@@ -92,6 +92,14 @@ void Game::update(float deltaTime) {
     updateEntities(deltaTime);
     updateCollisions();
 
+    collectEffects_.erase(
+        std::remove_if(
+            collectEffects_.begin(),
+            collectEffects_.end(),
+            [this](const Renderer::CollectEffect& effect) { return gameTime_ - effect.time > 0.7f; }),
+        collectEffects_.end()
+    );
+
     scoreAccumulator_ += speed_ * deltaTime * 3.0f;
     const int distancePoints = static_cast<int>(scoreAccumulator_);
     if(distancePoints > 0) { score_ += distancePoints; scoreAccumulator_ -= static_cast<float>(distancePoints); }
@@ -107,8 +115,7 @@ void Game::updatePlayer(float deltaTime) {
 }
 
 void Game::updateWorld(float deltaTime) {
-    roadScroll_ = std::fmod(roadScroll_ + speed_ * deltaTime, kLaneSegmentLength);
-    if(roadScroll_ < 0.0f) { roadScroll_ += kLaneSegmentLength; }
+    roadScroll_ += speed_ * deltaTime;
 
     spawnTimer_ -= deltaTime;
     if(spawnTimer_ <= 0.0f) {
@@ -141,20 +148,20 @@ void Game::updateCollisions() {
 
         switch(entity->type) {
             case Renderer::EntityType::Obstacle:
-                health_ -= 1;
-                speed_ = std::max(kMinSpeed, speed_ - 2.5f);
-                if(health_ <= 0) { gameOver_ = true; }
+                gameOver_ = true;
                 break;
             case Renderer::EntityType::SlowCollectible:
                 purpleStreak_ += 1;
                 speed_ = std::max(kMinSpeed, speed_ - 1.8f);
                 if(purpleStreak_ >= 3) { gameOver_ = true; }
+                collectEffects_.push_back({entity->type, entity->lane, entity->z, gameTime_});
                 break;
             case Renderer::EntityType::ScoreCollectible:
                 score_ += 100;
                 health_ = std::min(kMaxHealth, health_ + 1);
                 purpleStreak_ = std::max(0, purpleStreak_ - 1);
                 speed_ = std::min(kMaxSpeed, speed_ + 1.8f);
+                collectEffects_.push_back({entity->type, entity->lane, entity->z, gameTime_});
                 break;
         }
 
@@ -177,7 +184,7 @@ void Game::spawnEntity() {
     entity.lane = laneDistribution(randomEngine_);
     entity.z = kSpawnZ;
     entity.spawnTime = gameTime_;
-    entity.textureIndex = (type == Renderer::EntityType::ScoreCollectible)
+    entity.textureIndex = (type == Renderer::EntityType::ScoreCollectible || type == Renderer::EntityType::SlowCollectible)
         ? std::uniform_int_distribution<int>(0, 2)(randomEngine_) : 0;
     entities_.push_back(entity);
 }
@@ -197,6 +204,7 @@ void Game::resetGame() {
     gameTime_ = 0.0f;
     accumulator_ = 0.0f;
     entities_.clear();
+    collectEffects_.clear();
     updateWindowTitle();
 }
 
