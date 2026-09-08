@@ -77,6 +77,7 @@ void Game::handleEvents() {
             case SDLK_RIGHT:
             case SDLK_d: if(!gameOver_) { targetLane_ = std::min(kLaneCount - 1, targetLane_ + 1); } break;
             case SDLK_r: resetGame(); break;
+            case SDLK_g: renderer_.toggleRetroMode(); break;
             default: break;
         }
     }
@@ -149,7 +150,9 @@ void Game::updateCollisions() {
         switch(entity->type) {
             case Renderer::EntityType::Obstacle:
                 gameOver_ = true;
-                break;
+                ++entity;
+                updateWindowTitle();
+                continue;
             case Renderer::EntityType::SlowCollectible:
                 purpleStreak_ += 1;
                 speed_ = std::max(kMinSpeed, speed_ - 1.8f);

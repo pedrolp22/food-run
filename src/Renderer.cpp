@@ -15,6 +15,8 @@ using namespace GameConfig;
 namespace {
 constexpr int kWindowWidth = 720;
 constexpr int kWindowHeight = 1280;
+constexpr int kRetroWidth = 480;
+constexpr int kRetroHeight = 640;
 constexpr int kOpenGLMajorVersion = 4;
 constexpr int kOpenGLMinorVersion = 6;
 constexpr int kVsyncEnabled = 1;
@@ -54,6 +56,8 @@ Vec3 normalize(const Vec3& value) {
 
 constexpr float kSunAmbient = 0.35f;
 const Vec3 kSunDir = normalize({-0.7f, 1.4f, 0.9f});
+constexpr float kRetroAffineStrength = 0.3f;
+constexpr float kRoadAffineStrength = 0.1f;
 
 float faceLightForNormal(const Vec3& n) {
     const float d = std::max(0.0f, dot(n, kSunDir));
@@ -276,7 +280,23 @@ Renderer::Renderer()
       burgerTexture_(),
       friesTexture_(),
       drawableWidth_(kWindowWidth),
-      drawableHeight_(kWindowHeight){
+      drawableHeight_(kWindowHeight),
+      retroMode_(false),
+      retroFbo_(0),
+      retroColorTexture_(0),
+      retroDepthRbo_(0),
+      retroShaderProgram_(0),
+      retroScaleUniform_(-1),
+      retroTextureUniform_(-1),
+      plainSnapUniform_(-1),
+      cubeSnapUniform_(-1),
+      spriteSnapUniform_(-1),
+      skySnapUniform_(-1),
+      sunSnapUniform_(-1),
+      roadSnapUniform_(-1),
+      modelSnapUniform_(-1),
+      roadAffineUniform_(-1),
+      modelAffineUniform_(-1){
 }
 
 Renderer::~Renderer() {
@@ -314,10 +334,61 @@ void Renderer::setWindowTitle(const std::string& title) const {
     SDL_SetWindowTitle(window_, title.c_str());
 }
 
+void Renderer::toggleRetroMode() {
+    retroMode_ = !retroMode_;
+}
+
 void Renderer::render(float playerX, float roadScroll, float gameTime, const std::vector<Entity>& entities,
                       const std::vector<CollectEffect>& collectEffects) {
     if(!window_ || shaderProgram_ == 0) { return; }
 
+    if (retroMode_ && retroFbo_ != 0) {
+        glBindFramebuffer(GL_FRAMEBUFFER, retroFbo_);
+        glViewport(0, 0, kRetroWidth, kRetroHeight);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+        glUseProgram(shaderProgram_);
+        glBindVertexArray(cubeVao_);
+
+        drawWorld(playerX, roadScroll, gameTime, entities, collectEffects);
+
+        glBindVertexArray(0);
+        glUseProgram(0);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+        const float scale = std::min(static_cast<float>(std::max(1, drawableWidth_)) / kRetroWidth,
+                                     static_cast<float>(std::max(1, drawableHeight_)) / kRetroHeight);
+        const float spanX = kRetroWidth * scale / static_cast<float>(std::max(1, drawableWidth_)) * 2.0f;
+        const float spanY = kRetroHeight * scale / static_cast<float>(std::max(1, drawableHeight_)) * 2.0f;
+
+        glViewport(0, 0, drawableWidth_, drawableHeight_);
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+        glDisable(GL_DEPTH_TEST);
+        glDisable(GL_BLEND);
+
+        glUseProgram(retroShaderProgram_);
+        glBindVertexArray(quadVao_);
+        glUniform2f(retroScaleUniform_, spanX, spanY);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, retroColorTexture_);
+        glUniform1i(retroTextureUniform_, 0);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glBindVertexArray(0);
+
+        glEnable(GL_DEPTH_TEST);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glClearColor(0.74f, 0.86f, 0.97f, 1.0f);
+
+        SDL_GL_SwapWindow(window_);
+        return;
+    }
+
+    glViewport(0, 0, drawableWidth_, drawableHeight_);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     glUseProgram(shaderProgram_);
@@ -381,7 +452,8 @@ bool Renderer::initializeGraphics() {
 
     return createShaderProgram() && createSpriteShaderProgram() && createSkyShaderProgram() && createSunShaderProgram() &&
            createRoadShaderProgram() && createModelShaderProgram() && createCubeShaderProgram() && createCubeMesh() &&
-           createQuadMesh() && loadCollectibleTextures() && loadGLTFModels();
+           createQuadMesh() && loadCollectibleTextures() && loadGLTFModels() && createRetroShaderProgram() &&
+           createRetroBuffer();
 }
 
 bool Renderer::createShaderProgram() {
@@ -390,8 +462,15 @@ bool Renderer::createShaderProgram() {
 layout (location = 0) in vec3 aPosition;
 
 uniform mat4 uMvp;
+uniform vec2 uSnap;
 
-void main() { gl_Position = uMvp * vec4(aPosition, 1.0); }
+void main() {
+    gl_Position = uMvp * vec4(aPosition, 1.0);
+    if (uSnap.x > 0.0 && uSnap.y > 0.0) {
+        vec2 snapped = floor(gl_Position.xy / gl_Position.w / uSnap + 0.5) * uSnap * gl_Position.w;
+        gl_Position.xy = snapped;
+    }
+}
 )";
 
     constexpr const char* fragmentShaderSource = R"(
@@ -430,6 +509,7 @@ void main() { FragColor = vec4(uColor, uAlpha); }
     mvpUniform_ = glGetUniformLocation(shaderProgram_, "uMvp");
     colorUniform_ = glGetUniformLocation(shaderProgram_, "uColor");
     alphaUniform_ = glGetUniformLocation(shaderProgram_, "uAlpha");
+    plainSnapUniform_ = glGetUniformLocation(shaderProgram_, "uSnap");
     if (mvpUniform_ < 0 || colorUniform_ < 0 || alphaUniform_ < 0) {
         std::cerr << "Shader program is missing required uniforms\n";
         glDeleteProgram(shaderProgram_); shaderProgram_ = 0; return false;
@@ -445,11 +525,16 @@ layout (location = 0) in vec3 aPosition;
 layout (location = 1) in vec2 aTexCoord;
 
 uniform mat4 uMvp;
+uniform vec2 uSnap;
 
 out vec2 vTexCoord;
 
 void main() {
     gl_Position = uMvp * vec4(aPosition, 1.0);
+    if (uSnap.x > 0.0 && uSnap.y > 0.0) {
+        vec2 snapped = floor(gl_Position.xy / gl_Position.w / uSnap + 0.5) * uSnap * gl_Position.w;
+        gl_Position.xy = snapped;
+    }
     vTexCoord = aTexCoord;
 }
 )";
@@ -524,6 +609,7 @@ void main() {
     spriteSpawnTimeUniform_ = glGetUniformLocation(spriteShaderProgram_, "uSpawnTime");
     spriteRippleColorUniform_ = glGetUniformLocation(spriteShaderProgram_, "uRippleColor");
     spriteAspectUniform_ = glGetUniformLocation(spriteShaderProgram_, "uAspect");
+    spriteSnapUniform_ = glGetUniformLocation(spriteShaderProgram_, "uSnap");
 
     if (spriteMvpUniform_ < 0 || spriteTextureUniform_ < 0 || spriteTimeUniform_ < 0 ||
         spriteSpawnTimeUniform_ < 0 || spriteRippleColorUniform_ < 0 || spriteAspectUniform_ < 0) {
@@ -541,11 +627,16 @@ layout (location = 0) in vec3 aPosition;
 layout (location = 1) in vec2 aTexCoord;
 
 uniform mat4 uMvp;
+uniform vec2 uSnap;
 
 out vec2 vUv;
 
 void main() {
     gl_Position = uMvp * vec4(aPosition, 1.0);
+    if (uSnap.x > 0.0 && uSnap.y > 0.0) {
+        vec2 snapped = floor(gl_Position.xy / gl_Position.w / uSnap + 0.5) * uSnap * gl_Position.w;
+        gl_Position.xy = snapped;
+    }
     vUv = aTexCoord;
 }
 )";
@@ -590,6 +681,7 @@ void main() {
     skyMvpUniform_ = glGetUniformLocation(skyShaderProgram_, "uMvp");
     skyTopColorUniform_ = glGetUniformLocation(skyShaderProgram_, "uTopColor");
     skyBottomColorUniform_ = glGetUniformLocation(skyShaderProgram_, "uBottomColor");
+    skySnapUniform_ = glGetUniformLocation(skyShaderProgram_, "uSnap");
     if (skyMvpUniform_ < 0 || skyTopColorUniform_ < 0 || skyBottomColorUniform_ < 0) {
         std::cerr << "Sky shader program is missing required uniforms\n";
         glDeleteProgram(skyShaderProgram_); skyShaderProgram_ = 0; return false;
@@ -605,11 +697,16 @@ layout (location = 0) in vec3 aPosition;
 layout (location = 1) in vec2 aTexCoord;
 
 uniform mat4 uMvp;
+uniform vec2 uSnap;
 
 out vec2 vUv;
 
 void main() {
     gl_Position = uMvp * vec4(aPosition, 1.0);
+    if (uSnap.x > 0.0 && uSnap.y > 0.0) {
+        vec2 snapped = floor(gl_Position.xy / gl_Position.w / uSnap + 0.5) * uSnap * gl_Position.w;
+        gl_Position.xy = snapped;
+    }
     vUv = aTexCoord;
 }
 )";
@@ -661,6 +758,7 @@ void main() {
     sunColorUniform_ = glGetUniformLocation(sunShaderProgram_, "uColor");
     sunCoreUniform_ = glGetUniformLocation(sunShaderProgram_, "uCore");
     sunHazeUniform_ = glGetUniformLocation(sunShaderProgram_, "uHaze");
+    sunSnapUniform_ = glGetUniformLocation(sunShaderProgram_, "uSnap");
     if (sunMvpUniform_ < 0 || sunColorUniform_ < 0 || sunCoreUniform_ < 0 || sunHazeUniform_ < 0) {
         std::cerr << "Sun shader program is missing required uniforms\n";
         glDeleteProgram(sunShaderProgram_); sunShaderProgram_ = 0; return false;
@@ -678,12 +776,21 @@ layout (location = 1) in vec2 aTexCoord;
 uniform mat4 uMvp;
 uniform vec2 uTexScale;
 uniform vec2 uTexOffset;
+uniform vec2 uSnap;
 
 out vec2 vTexCoord;
+out vec2 vAffineTexCoord;
+out float vInvW;
 
 void main() {
     gl_Position = uMvp * vec4(aPosition, 1.0);
+    if (uSnap.x > 0.0 && uSnap.y > 0.0) {
+        vec2 snapped = floor(gl_Position.xy / gl_Position.w / uSnap + 0.5) * uSnap * gl_Position.w;
+        gl_Position.xy = snapped;
+    }
     vTexCoord = aTexCoord * uTexScale + uTexOffset;
+    vAffineTexCoord = vTexCoord / gl_Position.w;
+    vInvW = 1.0 / gl_Position.w;
 }
 )";
 
@@ -691,6 +798,8 @@ void main() {
 #version 330 core
 
 in vec2 vTexCoord;
+in vec2 vAffineTexCoord;
+in float vInvW;
 out vec4 FragColor;
 
 uniform sampler2D uTexture;
@@ -699,9 +808,13 @@ uniform float uLight;
 uniform float uAlpha;
 uniform float uTime;
 uniform float uHeat;
+uniform float uAffine;
 
 void main() {
     vec2 tc = vTexCoord;
+    if (uAffine > 0.001) {
+        tc = mix(vTexCoord, vAffineTexCoord * (1.0 / vInvW), uAffine);
+    }
     float heatBoost = 0.0;
     if (uHeat > 0.0001) {
         tc += vec2(sin(uTime * 2.3 + vTexCoord.y * 7.0) * 0.7 + sin(uTime * 3.4 + vTexCoord.y * 17.0) * 0.3,
@@ -744,6 +857,8 @@ void main() {
     roadAlphaUniform_ = glGetUniformLocation(roadShaderProgram_, "uAlpha");
     roadTimeUniform_ = glGetUniformLocation(roadShaderProgram_, "uTime");
     roadHeatUniform_ = glGetUniformLocation(roadShaderProgram_, "uHeat");
+    roadSnapUniform_ = glGetUniformLocation(roadShaderProgram_, "uSnap");
+    roadAffineUniform_ = glGetUniformLocation(roadShaderProgram_, "uAffine");
 
     if (roadMvpUniform_ < 0 || roadTextureUniform_ < 0 || roadTexScaleUniform_ < 0 ||
         roadTexOffsetUniform_ < 0 || roadLodUniform_ < 0 || roadLightUniform_ < 0 ||
@@ -763,14 +878,23 @@ layout (location = 1) in vec3 aNormal;
 layout (location = 2) in vec2 aTexCoord;
 
 uniform mat4 uMvp;
+uniform vec2 uSnap;
 
 out vec3 vNormal;
 out vec2 vUv;
+out vec2 vAffineUv;
+out float vInvW;
 
 void main() {
     gl_Position = uMvp * vec4(aPosition, 1.0);
+    if (uSnap.x > 0.0 && uSnap.y > 0.0) {
+        vec2 snapped = floor(gl_Position.xy / gl_Position.w / uSnap + 0.5) * uSnap * gl_Position.w;
+        gl_Position.xy = snapped;
+    }
     vNormal = aNormal;
     vUv = aTexCoord;
+    vAffineUv = aTexCoord / gl_Position.w;
+    vInvW = 1.0 / gl_Position.w;
 }
 )";
 
@@ -779,6 +903,8 @@ void main() {
 
 in vec3 vNormal;
 in vec2 vUv;
+in vec2 vAffineUv;
+in float vInvW;
 out vec4 FragColor;
 
 uniform sampler2D uTexture;
@@ -786,9 +912,14 @@ uniform vec3 uBaseColor;
 uniform float uHasTexture;
 uniform vec3 uSunDir;
 uniform float uAmbient;
+uniform float uAffine;
 
 void main() {
-    vec3 baseColor = uHasTexture > 0.5 ? texture(uTexture, vUv).rgb : uBaseColor;
+    vec2 uv = vUv;
+    if (uAffine > 0.001) {
+        uv = mix(vUv, vAffineUv * (1.0 / vInvW), uAffine);
+    }
+    vec3 baseColor = uHasTexture > 0.5 ? texture(uTexture, uv).rgb : uBaseColor;
     float diffuse = max(dot(normalize(vNormal), normalize(uSunDir)), 0.0);
     float light = uAmbient + (1.0 - uAmbient) * diffuse;
     FragColor = vec4(baseColor * light, 1.0);
@@ -824,6 +955,8 @@ void main() {
     modelTextureUniform_ = glGetUniformLocation(modelShaderProgram_, "uTexture");
     modelHasTextureUniform_ = glGetUniformLocation(modelShaderProgram_, "uHasTexture");
     modelBaseColorUniform_ = glGetUniformLocation(modelShaderProgram_, "uBaseColor");
+    modelSnapUniform_ = glGetUniformLocation(modelShaderProgram_, "uSnap");
+    modelAffineUniform_ = glGetUniformLocation(modelShaderProgram_, "uAffine");
     if (modelMvpUniform_ < 0 || modelSunDirUniform_ < 0 || modelAmbientUniform_ < 0 ||
         modelTextureUniform_ < 0 || modelHasTextureUniform_ < 0 || modelBaseColorUniform_ < 0) {
         std::cerr << "Model shader program is missing required uniforms\n";
@@ -840,11 +973,16 @@ layout (location = 0) in vec3 aPosition;
 layout (location = 1) in vec3 aNormal;
 
 uniform mat4 uMvp;
+uniform vec2 uSnap;
 
 out vec3 vNormal;
 
 void main() {
     gl_Position = uMvp * vec4(aPosition, 1.0);
+    if (uSnap.x > 0.0 && uSnap.y > 0.0) {
+        vec2 snapped = floor(gl_Position.xy / gl_Position.w / uSnap + 0.5) * uSnap * gl_Position.w;
+        gl_Position.xy = snapped;
+    }
     vNormal = aNormal;
 }
 )";
@@ -893,10 +1031,126 @@ void main() {
     cubeColorUniform_ = glGetUniformLocation(cubeShaderProgram_, "uColor");
     cubeSunDirUniform_ = glGetUniformLocation(cubeShaderProgram_, "uSunDir");
     cubeAmbientUniform_ = glGetUniformLocation(cubeShaderProgram_, "uAmbient");
+    cubeSnapUniform_ = glGetUniformLocation(cubeShaderProgram_, "uSnap");
 
     if (cubeMvpUniform_ < 0 || cubeColorUniform_ < 0 || cubeSunDirUniform_ < 0 || cubeAmbientUniform_ < 0) {
         std::cerr << "Cube shader program is missing required uniforms\n";
         glDeleteProgram(cubeShaderProgram_); cubeShaderProgram_ = 0; return false;
+    }
+
+    return true;
+}
+
+bool Renderer::createRetroShaderProgram() {
+    constexpr const char* vertexSource = R"(
+#version 330 core
+layout (location = 0) in vec3 aPosition;
+layout (location = 1) in vec2 aTexCoord;
+
+uniform vec2 uScale;
+
+out vec2 vTexCoord;
+
+void main() {
+    gl_Position = vec4(aPosition.xy * uScale, 0.0, 1.0);
+    vTexCoord = aTexCoord;
+}
+)";
+
+    constexpr const char* fragmentSource = R"(
+#version 330 core
+
+in vec2 vTexCoord;
+out vec4 FragColor;
+
+uniform sampler2D uTexture;
+
+// 4x4 Bayer ordered-dither matrix (row-major).
+const mat4 bayer = mat4(
+    vec4(0.0, 12.0, 3.0, 15.0),
+    vec4(8.0, 4.0, 11.0, 7.0),
+    vec4(2.0, 14.0, 1.0, 13.0),
+    vec4(10.0, 6.0, 9.0, 5.0)
+);
+
+void main() {
+    vec3 color = texture(uTexture, vTexCoord).rgb;
+
+    vec2 retroPixel = floor(vTexCoord * vec2(textureSize(uTexture, 0)));
+    float dither = (bayer[int(mod(retroPixel.x, 4.0))][int(mod(retroPixel.y, 4.0))] + 0.5) / 16.0;
+
+    vec3 levels = vec3(15.0);
+    vec3 quantized = min(floor(color * levels + dither), levels) / levels;
+
+    FragColor = vec4(quantized, 1.0);
+}
+)";
+
+    const unsigned int vertexShader = compileShader(GL_VERTEX_SHADER, vertexSource, "Retro Vertex");
+    if(vertexShader == 0) { return false; }
+
+    const unsigned int fragmentShader = compileShader(GL_FRAGMENT_SHADER, fragmentSource, "Retro Fragment");
+    if(fragmentShader == 0) { glDeleteShader(vertexShader); return false; }
+
+    retroShaderProgram_ = glCreateProgram();
+    glAttachShader(retroShaderProgram_, vertexShader);
+    glAttachShader(retroShaderProgram_, fragmentShader);
+    glLinkProgram(retroShaderProgram_);
+
+    glDeleteShader(vertexShader);
+    glDeleteShader(fragmentShader);
+
+    int success = 0;
+    glGetProgramiv(retroShaderProgram_, GL_LINK_STATUS, &success);
+    if(success == 0) {
+        std::array<char, 1024> infoLog{};
+        glGetProgramInfoLog(retroShaderProgram_, static_cast<int>(infoLog.size()), nullptr, infoLog.data());
+        std::cerr << "Retro shader program linking failed: " << infoLog.data() << '\n';
+        glDeleteProgram(retroShaderProgram_); retroShaderProgram_ = 0; return false;
+    }
+
+    retroScaleUniform_ = glGetUniformLocation(retroShaderProgram_, "uScale");
+    retroTextureUniform_ = glGetUniformLocation(retroShaderProgram_, "uTexture");
+    if (retroScaleUniform_ < 0 || retroTextureUniform_ < 0) {
+        std::cerr << "Retro shader program is missing required uniforms\n";
+        glDeleteProgram(retroShaderProgram_); retroShaderProgram_ = 0; return false;
+    }
+
+    return true;
+}
+
+bool Renderer::createRetroBuffer() {
+    glGenFramebuffers(1, &retroFbo_);
+    glGenTextures(1, &retroColorTexture_);
+    glGenRenderbuffers(1, &retroDepthRbo_);
+
+    if (retroFbo_ == 0 || retroColorTexture_ == 0 || retroDepthRbo_ == 0) {
+        std::cerr << "Failed to create retro framebuffer objects\n";
+        return false;
+    }
+
+    glBindTexture(GL_TEXTURE_2D, retroColorTexture_);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, kRetroWidth, kRetroHeight, 0, GL_RGB, GL_UNSIGNED_BYTE, nullptr);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    glBindRenderbuffer(GL_RENDERBUFFER, retroDepthRbo_);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, kRetroWidth, kRetroHeight);
+    glBindRenderbuffer(GL_RENDERBUFFER, 0);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, retroFbo_);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, retroColorTexture_, 0);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, retroDepthRbo_);
+
+    const bool complete = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    if (!complete) {
+        std::cerr << "Retro framebuffer is incomplete\n";
+        return false;
     }
 
     return true;
@@ -1078,11 +1332,20 @@ void Renderer::drawWorld(float playerX, float roadScroll, float gameTime, const 
                          const std::vector<CollectEffect>& collectEffects) {
     constexpr Color playerColor = {0.12f, 0.55f, 1.0f};
 
-    const float aspectRatio = static_cast<float>(std::max(1, drawableWidth_)) /
-                              static_cast<float>(std::max(1, drawableHeight_));
+    const float aspectRatio = (retroMode_ ? static_cast<float>(kRetroWidth) : static_cast<float>(std::max(1, drawableWidth_))) /
+                              (retroMode_ ? static_cast<float>(kRetroHeight) : static_cast<float>(std::max(1, drawableHeight_)));
     const Mat4 projection = perspective(radians(60.0f), aspectRatio, 0.1f, 200.0f);
     const Mat4 view = lookAt({0.0f, 5.0f, 9.0f}, {0.0f, 0.5f, -18.0f}, {0.0f, 1.0f, 0.0f});
-    const Mat4 viewProj = multiply(projection, view);
+
+    Mat4 renderedView = view;
+    if (retroMode_) {
+        const float t = gameTime;
+        const float jx = std::sin(t * 7.3f) * 0.004f;
+        const float jy = std::sin(t * 5.1f + 1.3f) * 0.003f;
+        const float jz = std::sin(t * 6.7f + 2.2f) * 0.004f;
+        renderedView = multiply(translation({jx, jy, jz}), view);
+    }
+    const Mat4 viewProj = multiply(projection, renderedView);
 
     const float scrollOffset = std::fmod(roadScroll, kLaneSegmentLength);
 
@@ -1091,6 +1354,7 @@ void Renderer::drawWorld(float playerX, float roadScroll, float gameTime, const 
     glBindVertexArray(quadVao_);
     {
         const Mat4 skyScale = scale({2.0f, 2.0f, 1.0f});
+        applyRetroSnap(skySnapUniform_);
         glUniformMatrix4fv(skyMvpUniform_, 1, GL_FALSE, skyScale.values.data());
         glUniform3f(skyTopColorUniform_, 0.30f, 0.60f, 0.93f);
         glUniform3f(skyBottomColorUniform_, 0.74f, 0.86f, 0.97f);
@@ -1111,7 +1375,7 @@ void Renderer::drawWorld(float playerX, float roadScroll, float gameTime, const 
     const float laneWidth = 1.85f;
     const float roadWidth = (kLanePositions[kLaneCount - 1] - kLanePositions[0]) + laneWidth;
     const float roadHalfEdge = roadWidth * 0.5f;
-    const float sidewalkHalfWidth = roadHalfEdge + 0.75f;
+    const float sidewalkHalfWidth = roadHalfEdge + 1.1f;
     const float ks = kLaneStartZ + scrollOffset;
 
     glUseProgram(shaderProgram_);
@@ -1136,6 +1400,9 @@ void Renderer::drawWorld(float playerX, float roadScroll, float gameTime, const 
 
     glUseProgram(roadShaderProgram_);
     glBindVertexArray(quadVao_);
+
+    applyRetroSnap(roadSnapUniform_);
+    applyRetroAffine(roadAffineUniform_, kRoadAffineStrength);
 
     constexpr float roadY = -0.04f;
     constexpr int kRoadSubdivisions = 6;
@@ -1180,10 +1447,10 @@ void Renderer::drawWorld(float playerX, float roadScroll, float gameTime, const 
 
     constexpr int kBuildingsPerSide = 4;
     constexpr float buildingSides[] = {-1.0f, 1.0f};
-    constexpr float kSkyscraperMinHeight = 6.0f;
+    constexpr float kSkyscraperMinHeight = 9.0f;
     constexpr Color roofColor = {0.45f, 0.45f, 0.48f};
-    constexpr float kCellWidth = 2.5f;
-    constexpr float kCellStartX = 3.7f;
+    constexpr float kCellWidth = 2.6f;
+    constexpr float kCellStartX = 4.5f;
 
     struct Building {
         float x;
@@ -1214,9 +1481,26 @@ void Renderer::drawWorld(float playerX, float roadScroll, float gameTime, const 
                 const unsigned int seed = static_cast<unsigned int>(i) * 97u +
                                           sideIndex * 131u + static_cast<unsigned int>(b) * 353u;
 
-                const float w = 1.6f + hashFloat(seed, 0) * 0.7f;
-                const float h = 1.5f + hashFloat(seed, 1) * 8.0f;
-                const float d = 2.5f + hashFloat(seed, 2) * 4.5f;
+                                const float baseWidth = 1.6f + hashFloat(seed, 0) * 0.7f;
+                const float roll = hashFloat(seed, 1);
+                float h;
+                float wFactor;
+                if (roll < 0.18f) {
+                    h = 2.2f + hashFloat(seed, 5) * 1.5f;
+                    wFactor = 1.0f;
+                } else if (roll < 0.55f) {
+                    h = 5.0f + hashFloat(seed, 5) * 3.5f;
+                    wFactor = 1.15f;
+                } else if (roll < 0.85f) {
+                    h = 11.0f + hashFloat(seed, 5) * 4.0f;
+                    wFactor = 1.45f;
+                } else {
+                    h = 17.0f + hashFloat(seed, 5) * 8.0f;
+                    wFactor = 1.75f;
+                }
+                const float w = baseWidth * wFactor;
+                const float depthFactor = 1.0f + (wFactor - 1.0f) * 0.8f;
+                const float d = (2.5f + hashFloat(seed, 2) * 4.5f) * depthFactor;
 
                 const float cellCenterX = kCellStartX + (static_cast<float>(b) + 0.5f) * kCellWidth;
                 const float xJitterMax = std::max(0.05f, (kCellWidth - w) * 0.5f - 0.1f);
@@ -1273,7 +1557,7 @@ void Renderer::drawWorld(float playerX, float roadScroll, float gameTime, const 
     constexpr Color curbColor = {0.34f, 0.34f, 0.37f};
     constexpr float sidewalkTopY = 0.04f;
     constexpr float roadSurfaceY = -0.04f;
-    constexpr float sidewalkWidth = 0.75f;
+    constexpr float sidewalkWidth = 1.1f;
     constexpr float sidewalkSigns[] = {-1.0f, 1.0f};
     constexpr float kCurbThickness = 0.04f;
 
@@ -1320,36 +1604,26 @@ void Renderer::drawWorld(float playerX, float roadScroll, float gameTime, const 
 
     for (const Building& building : buildings) {
         if (building.fade <= 0.0f) { continue; }
-        drawShadow(viewProj.values, building.x, building.z,
-                   building.w * 1.05f, building.d, -0.02f, 0.30f * building.fade);
         drawSunShadow(viewProj.values, building.x, building.z,
-                      building.h, building.w, building.d, -0.02f, 0.26f * building.fade);
+                      building.h, building.w, building.d, -0.02f, 0.30f * building.fade);
     }
 
-    drawShadow(viewProj.values, playerX + worldLateralOffset(kPlayerZ), kPlayerZ,
-               kPlayerScale * 1.1f, 0.55f, -0.035f, 0.30f);
     drawSunShadow(viewProj.values, playerX + worldLateralOffset(kPlayerZ), kPlayerZ,
-                  kPlayerScale, kPlayerScale * 0.9f, kPlayerScale * 0.9f, -0.035f, 0.22f);
+                  kPlayerScale, kPlayerScale * 0.9f, kPlayerScale * 0.9f, -0.035f, 0.30f);
 
     for(const Entity& entity : entities){
         if(entity.type == EntityType::Obstacle) {
             const bool isCone = (entity.textureIndex % 2 == 0);
             if (isCone) {
-                drawShadow(viewProj.values, laneToX(entity.lane) + worldLateralOffset(entity.z), entity.z,
-                           1.0f, 0.9f, -0.035f, 0.30f);
                 drawSunShadow(viewProj.values, laneToX(entity.lane) + worldLateralOffset(entity.z), entity.z,
-                              0.85f, 0.9f, 0.9f, -0.035f, 0.22f);
+                              0.85f, 0.9f, 0.9f, -0.035f, 0.30f);
             } else {
-                drawShadow(viewProj.values, laneToX(entity.lane) + worldLateralOffset(entity.z), entity.z,
-                           2.6f, 0.6f, -0.035f, 0.30f);
                 drawSunShadow(viewProj.values, laneToX(entity.lane) + worldLateralOffset(entity.z), entity.z,
-                              0.8f, 2.6f, 0.7f, -0.035f, 0.22f);
+                              0.8f, 2.6f, 0.7f, -0.035f, 0.30f);
             }
         } else {
-            drawShadow(viewProj.values, laneToX(entity.lane) + worldLateralOffset(entity.z), entity.z,
-                       1.1f, 0.6f, -0.035f, 0.30f);
             drawSunShadow(viewProj.values, laneToX(entity.lane) + worldLateralOffset(entity.z), entity.z,
-                          0.8f, 1.0f, 1.0f, -0.035f, 0.18f);
+                          0.8f, 1.0f, 1.0f, -0.035f, 0.26f);
         }
     }
 
@@ -1365,6 +1639,9 @@ void Renderer::drawWorld(float playerX, float roadScroll, float gameTime, const 
     glUseProgram(modelShaderProgram_);
 
     const float decorCenterX = (roadHalfEdge + sidewalkHalfWidth) * 0.5f;
+    const float sidewalkHalfWidthActual = sidewalkHalfWidth - roadHalfEdge;
+    const float benchOffset = sidewalkHalfWidthActual * 0.28f;
+    const float trashOffset = sidewalkHalfWidthActual * 0.02f;
 
     constexpr float kDecorSpacing = 8.0f;
     constexpr float kDecorNearZ = -86.0f;
@@ -1379,11 +1656,13 @@ void Renderer::drawWorld(float playerX, float roadScroll, float gameTime, const 
         const float zJitter = (hashFloat(seed, 1) - 0.5f) * 2.0f;
         const float propZ = roadScroll - static_cast<float>(i) * kDecorSpacing + zJitter;
         const float sideSign = hashFloat(seed, 2) < 0.5f ? -1.0f : 1.0f;
-        const float xJitter = (hashFloat(seed, 3) - 0.5f) * 0.4f;
-        const float propX = sideSign * (decorCenterX + xJitter) + worldLateralOffset(propZ);
+        const float isBench = hashFloat(seed, 4) < 0.45f;
+        const float xJitter = (hashFloat(seed, 3) - 0.5f) * 0.2f;
+        const float offset = isBench ? benchOffset : trashOffset;
+        const float propX = sideSign * (decorCenterX + offset + xJitter) + worldLateralOffset(propZ);
         const float propY = sidewalkTopY - worldCurvatureDrop(propZ);
 
-        if (hashFloat(seed, 4) < 0.45f) {
+        if (isBench) {
             drawGLTFModel(viewProj.values, benchModel_,
                           {propX, propY, propZ, 1.0f, 1.0f, 1.0f});
         } else {
@@ -1456,6 +1735,7 @@ void Renderer::drawCube(const std::array<float, 16>& viewProj, const Transform& 
     vp.values = viewProj;
     const Mat4 mvp = multiply(vp, model);
 
+    applyRetroSnap(cubeSnapUniform_);
     glUniformMatrix4fv(cubeMvpUniform_, 1, GL_FALSE, mvp.values.data());
     glUniform3f(cubeColorUniform_, color.r, color.g, color.b);
     glUniform3f(cubeSunDirUniform_, kSunDir.x, kSunDir.y, kSunDir.z);
@@ -1473,6 +1753,8 @@ void Renderer::drawGLTFModel(const std::array<float, 16>& viewProj, const GLTFMo
     vp.values = viewProj;
     const Mat4 mvp = multiply(vp, modelMatrix);
 
+    applyRetroSnap(modelSnapUniform_);
+    applyRetroAffine(modelAffineUniform_, kRetroAffineStrength);
     glUniformMatrix4fv(modelMvpUniform_, 1, GL_FALSE, mvp.values.data());
     glUniform3f(modelSunDirUniform_, kSunDir.x, kSunDir.y, kSunDir.z);
     glUniform1f(modelAmbientUniform_, kSunAmbient);
@@ -1515,6 +1797,8 @@ void Renderer::drawTexturedQuad(const std::array<float, 16>& viewProj, unsigned 
     const float lod = computeMipLevel(transform.x, transform.y, transform.z,
                                       transform.scaleX, transform.scaleY, texelU, texelV);
 
+    applyRetroSnap(roadSnapUniform_);
+    applyRetroAffine(roadAffineUniform_, kRetroAffineStrength);
     glUniformMatrix4fv(roadMvpUniform_, 1, GL_FALSE, mvp.values.data());
     glUniform1i(roadTextureUniform_, 0);
     glUniform2f(roadTexScaleUniform_, texScaleU, texScaleV);
@@ -1572,34 +1856,16 @@ void Renderer::drawColoredQuad(const std::array<float, 16>& viewProj, const Colo
     vp.values = viewProj;
     const Mat4 mvp = multiply(vp, model);
 
+    applyRetroSnap(plainSnapUniform_);
     glUniformMatrix4fv(mvpUniform_, 1, GL_FALSE, mvp.values.data());
     glUniform3f(colorUniform_, color.r * lightFactor, color.g * lightFactor, color.b * lightFactor);
     glUniform1f(alphaUniform_, alpha);
     glDrawArrays(GL_TRIANGLES, 0, 6);
 }
 
-void Renderer::drawShadow(const std::array<float, 16>& viewProj, float centerX, float centerZ,
-                          float width, float depth, float y, float alpha) const {
-    constexpr Color shadowColor = {0.02f, 0.02f, 0.03f};
-    const float drop = worldCurvatureDrop(centerZ);
-
-    struct Shell { float scale; float alphaScale; };
-    constexpr Shell shells[] = {
-        {1.00f, 1.00f},
-        {1.18f, 0.60f},
-        {1.42f, 0.30f},
-        {1.72f, 0.14f},
-    };
-    for (const Shell& shell : shells) {
-        drawColoredQuad(viewProj, shadowColor,
-                        {centerX, y - drop, centerZ, width * shell.scale, depth * shell.scale, 1.0f},
-                        static_cast<int>(Face::Top), 1.0f, alpha * shell.alphaScale);
-    }
-}
-
 void Renderer::drawSunShadow(const std::array<float, 16>& viewProj, float centerX, float centerZ,
                              float height, float width, float depth, float y, float alpha) const {
-    const Vec3 lightDir = {-kSunDir.x, -kSunDir.y, -kSunDir.z};
+    const Vec3 lightDir = {-kSunDir.x, -kSunDir.y, kSunDir.z};
     const float horiz = std::sqrt(lightDir.x * lightDir.x + lightDir.z * lightDir.z);
     if (horiz < 1e-4f) { return; }
     const float lx = lightDir.x / horiz;
@@ -1610,62 +1876,54 @@ void Renderer::drawSunShadow(const std::array<float, 16>& viewProj, float center
 
     const float wAlong = (std::abs(width * lx) + std::abs(depth * lz)) * 0.5f;
     const float wPerp = (std::abs(width * perpX) + std::abs(depth * perpZ)) * 0.5f;
-    const float maxLen = 2.0f * wAlong + len;
+    const float fullLen = 2.0f * wAlong + len;
+
+    constexpr float kShadowMaxZ = kPlayerZ + 4.0f;
+    float shadowLen = fullLen;
+    if (lz > 0.0f) {
+        const float sFar = (kShadowMaxZ - centerZ) / lz;
+        shadowLen = std::min(shadowLen, sFar + wAlong);
+    }
+    if (shadowLen <= 0.0f) { return; }
 
     constexpr Color shadowColor = {0.02f, 0.02f, 0.03f};
+    const float shadowWidth = 2.0f * wPerp;
+    const float latBase = worldLateralOffset(centerZ);
 
-    struct Layer { float start; float end; float alphaScale; };
-    constexpr Layer layers[] = {
-        {0.00f, 1.00f, 0.80f},
-        {0.22f, 1.00f, 0.60f},
-        {0.44f, 1.00f, 0.42f},
-        {0.66f, 1.00f, 0.26f},
-        {0.84f, 1.00f, 0.14f},
-    };
+    constexpr int kShadowSegments = 10;
     Mat4 vp;
     vp.values = viewProj;
 
-    for (const Layer& layer : layers) {
-        const float s0 = layer.start * maxLen;
-        const float s1 = layer.end * maxLen;
+    for (int i = 0; i < kShadowSegments; ++i) {
+        const float s0 = -wAlong + shadowLen * (static_cast<float>(i) / kShadowSegments);
+        const float s1 = -wAlong + shadowLen * (static_cast<float>(i + 1) / kShadowSegments);
+        const float segMid = (s0 + s1) * 0.5f;
         const float segLen = s1 - s0;
-        const float mid = (s0 + s1) * 0.5f;
 
-        const float px = centerX + lx * (mid - wAlong);
-        const float pz = centerZ + lz * (mid - wAlong);
+        const float px = centerX + lx * segMid + (worldLateralOffset(centerZ + lz * segMid) - latBase);
+        const float pz = centerZ + lz * segMid;
         const float drop = worldCurvatureDrop(pz);
 
-        const float penumbra = 1.0f + (s0 / maxLen) * 0.60f;
+        Mat4 model{};
+        model.values[0] = lx * segLen;
+        model.values[2] = lz * segLen;
+        model.values[4] = perpX * shadowWidth;
+        model.values[6] = perpZ * shadowWidth;
+        model.values[8] = 0.0f;
+        model.values[9] = 1.0f;
+        model.values[10] = 0.0f;
+        model.values[12] = px;
+        model.values[13] = y - drop;
+        model.values[14] = pz;
+        model.values[15] = 1.0f;
 
-        struct Feather { float widthScale; float alphaScale; };
-        constexpr Feather feathers[] = {
-            {1.00f, 1.00f},
-            {1.14f, 0.30f},
-            {1.30f, 0.10f},
-        };
-        for (const Feather& feather : feathers) {
-            const float shadowWidth = 2.0f * wPerp * penumbra * feather.widthScale;
+        const Mat4 mvp = multiply(vp, model);
 
-            Mat4 model{};
-            model.values[0] = lx * segLen;
-            model.values[2] = lz * segLen;
-            model.values[4] = perpX * shadowWidth;
-            model.values[6] = perpZ * shadowWidth;
-            model.values[8] = 0.0f;
-            model.values[9] = 1.0f;
-            model.values[10] = 0.0f;
-            model.values[12] = px;
-            model.values[13] = y - drop;
-            model.values[14] = pz;
-            model.values[15] = 1.0f;
-
-            const Mat4 mvp = multiply(vp, model);
-
-            glUniformMatrix4fv(mvpUniform_, 1, GL_FALSE, mvp.values.data());
-            glUniform3f(colorUniform_, shadowColor.r, shadowColor.g, shadowColor.b);
-            glUniform1f(alphaUniform_, alpha * layer.alphaScale * feather.alphaScale);
-            glDrawArrays(GL_TRIANGLES, 0, 6);
-        }
+        applyRetroSnap(plainSnapUniform_);
+        glUniformMatrix4fv(mvpUniform_, 1, GL_FALSE, mvp.values.data());
+        glUniform3f(colorUniform_, shadowColor.r, shadowColor.g, shadowColor.b);
+        glUniform1f(alphaUniform_, alpha);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
     }
 }
 
@@ -1686,6 +1944,7 @@ void Renderer::drawSun(const std::array<float, 16>& viewProj) const {
     );
     const Mat4 mvp = multiply(vp, model);
 
+    applyRetroSnap(sunSnapUniform_);
     glUniformMatrix4fv(sunMvpUniform_, 1, GL_FALSE, mvp.values.data());
     glUniform3f(sunColorUniform_, sunColor.r, sunColor.g, sunColor.b);
     glUniform1f(sunCoreUniform_, 6.5f);
@@ -1782,6 +2041,7 @@ void Renderer::drawSprite(const std::array<float, 16>& viewProj, unsigned int te
     vp.values = viewProj;
     const Mat4 mvp = multiply(vp, model);
 
+    applyRetroSnap(spriteSnapUniform_);
     glUniformMatrix4fv(spriteMvpUniform_, 1, GL_FALSE, mvp.values.data());
     glUniform1f(spriteTimeUniform_, gameTime);
     glUniform1f(spriteSpawnTimeUniform_, spawnTime);
@@ -1794,7 +2054,23 @@ void Renderer::drawSprite(const std::array<float, 16>& viewProj, unsigned int te
     glDrawArrays(GL_TRIANGLES, 0, 6);
 }
 
+void Renderer::applyRetroSnap(int snapUniform) const {
+    if (snapUniform < 0) { return; }
+    const float dx = retroMode_ ? (2.0f * 2.0f / static_cast<float>(kRetroWidth)) : 0.0f;
+    const float dy = retroMode_ ? (2.0f * 2.0f / static_cast<float>(kRetroHeight)) : 0.0f;
+    glUniform2f(snapUniform, dx, dy);
+}
+
+void Renderer::applyRetroAffine(int affineUniform, float strength) const {
+    if (affineUniform < 0) { return; }
+    glUniform1f(affineUniform, retroMode_ ? strength : 0.0f);
+}
+
 void Renderer::shutdownGraphics(){
+    if(retroShaderProgram_!=0){ glDeleteProgram(retroShaderProgram_); retroShaderProgram_ = 0; }
+    if(retroDepthRbo_!=0){ glDeleteRenderbuffers(1, &retroDepthRbo_); retroDepthRbo_ = 0; }
+    if(retroColorTexture_!=0){ glDeleteTextures(1, &retroColorTexture_); retroColorTexture_ = 0; }
+    if(retroFbo_!=0){ glDeleteFramebuffers(1, &retroFbo_); retroFbo_ = 0; }
     if(roadTexture_.id!=0){ glDeleteTextures(1, &roadTexture_.id); roadTexture_ = {}; }
     if(skyscraperTexture_.id!=0){ glDeleteTextures(1, &skyscraperTexture_.id); skyscraperTexture_ = {}; }
     if(wallTexture_.id!=0){ glDeleteTextures(1, &wallTexture_.id); wallTexture_ = {}; }

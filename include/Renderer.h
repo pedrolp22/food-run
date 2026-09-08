@@ -42,6 +42,7 @@ public:
     int initSDL();
     void resizeViewport();
     void setWindowTitle(const std::string& title) const;
+    void toggleRetroMode();
     void render(float playerX, float roadScroll, float gameTime, const std::vector<Entity>& entities,
                 const std::vector<CollectEffect>& collectEffects);
 
@@ -71,6 +72,8 @@ private:
     bool createSkyShaderProgram();
     bool createSunShaderProgram();
     bool createCubeShaderProgram();
+    bool createRetroBuffer();
+    bool createRetroShaderProgram();
     bool createCubeMesh();
     bool createQuadMesh();
     bool createRoadShaderProgram();
@@ -90,8 +93,6 @@ private:
                          const Transform& transform, int face, float lightFactor, float alpha = 1.0f) const;
     void drawSprite(const std::array<float, 16>& viewProj, unsigned int texture, const Transform& transform,
                     const float rippleColor[3], float spawnTime, float gameTime, float texAspect) const;
-    void drawShadow(const std::array<float, 16>& viewProj, float centerX, float centerZ,
-                    float width, float depth, float y, float alpha) const;
     void drawSunShadow(const std::array<float, 16>& viewProj, float centerX, float centerZ,
                        float height, float width, float depth, float y, float alpha) const;
     void drawSun(const std::array<float, 16>& viewProj) const;
@@ -100,6 +101,8 @@ private:
     float computeMipLevel(float centerX, float centerY, float centerZ,
                           float worldU, float worldV, float texelU, float texelV) const;
     const SpriteTexture* findSpriteTexture(unsigned int id) const;
+    void applyRetroSnap(int snapUniform) const;
+    void applyRetroAffine(int affineUniform, float strength) const;
     void shutdownGraphics();
     void shutdown();
 
@@ -181,6 +184,24 @@ private:
 
     int drawableWidth_;
     int drawableHeight_;
+
+    bool retroMode_;
+    unsigned int retroFbo_;
+    unsigned int retroColorTexture_;
+    unsigned int retroDepthRbo_;
+    unsigned int retroShaderProgram_;
+    int retroScaleUniform_;
+    int retroTextureUniform_;
+
+    int plainSnapUniform_;
+    int cubeSnapUniform_;
+    int spriteSnapUniform_;
+    int skySnapUniform_;
+    int sunSnapUniform_;
+    int roadSnapUniform_;
+    int modelSnapUniform_;
+    int roadAffineUniform_;
+    int modelAffineUniform_;
 };
 
 
