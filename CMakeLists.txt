@@ -19,7 +19,9 @@ add_executable(subway
         include/Game.h
         include/GameConfig.h
         src/Renderer.cpp
-        include/Renderer.h)
+        include/Renderer.h
+        src/GLTFModel.cpp
+        include/GLTFModel.h)
 
 target_include_directories(subway
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)

@@ -185,7 +185,8 @@ void Game::spawnEntity() {
     entity.z = kSpawnZ;
     entity.spawnTime = gameTime_;
     entity.textureIndex = (type == Renderer::EntityType::ScoreCollectible || type == Renderer::EntityType::SlowCollectible)
-        ? std::uniform_int_distribution<int>(0, 2)(randomEngine_) : 0;
+        ? std::uniform_int_distribution<int>(0, 2)(randomEngine_)
+        : std::uniform_int_distribution<int>(0, 1)(randomEngine_);
     entities_.push_back(entity);
 }
 

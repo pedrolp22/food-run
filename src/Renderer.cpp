@@ -259,6 +259,13 @@ Renderer::Renderer()
       roadHeatUniform_(-1),
       quadVao_(0),
       quadVbo_(0),
+      modelShaderProgram_(0),
+      modelMvpUniform_(-1),
+      modelSunDirUniform_(-1),
+      modelAmbientUniform_(-1),
+      modelTextureUniform_(-1),
+      modelHasTextureUniform_(-1),
+      modelBaseColorUniform_(-1),
       roadTexture_(),
       skyscraperTexture_(),
       wallTexture_(),
@@ -373,8 +380,8 @@ bool Renderer::initializeGraphics() {
     glClearColor(0.74f, 0.86f, 0.97f, 1.0f);
 
     return createShaderProgram() && createSpriteShaderProgram() && createSkyShaderProgram() && createSunShaderProgram() &&
-           createRoadShaderProgram() && createCubeShaderProgram() && createCubeMesh() && createQuadMesh() &&
-           loadCollectibleTextures();
+           createRoadShaderProgram() && createModelShaderProgram() && createCubeShaderProgram() && createCubeMesh() &&
+           createQuadMesh() && loadCollectibleTextures() && loadGLTFModels();
 }
 
 bool Renderer::createShaderProgram() {
@@ -748,6 +755,84 @@ void main() {
     return true;
 }
 
+bool Renderer::createModelShaderProgram() {
+    constexpr const char* vertexSource = R"(
+#version 330 core
+layout (location = 0) in vec3 aPosition;
+layout (location = 1) in vec3 aNormal;
+layout (location = 2) in vec2 aTexCoord;
+
+uniform mat4 uMvp;
+
+out vec3 vNormal;
+out vec2 vUv;
+
+void main() {
+    gl_Position = uMvp * vec4(aPosition, 1.0);
+    vNormal = aNormal;
+    vUv = aTexCoord;
+}
+)";
+
+    constexpr const char* fragmentSource = R"(
+#version 330 core
+
+in vec3 vNormal;
+in vec2 vUv;
+out vec4 FragColor;
+
+uniform sampler2D uTexture;
+uniform vec3 uBaseColor;
+uniform float uHasTexture;
+uniform vec3 uSunDir;
+uniform float uAmbient;
+
+void main() {
+    vec3 baseColor = uHasTexture > 0.5 ? texture(uTexture, vUv).rgb : uBaseColor;
+    float diffuse = max(dot(normalize(vNormal), normalize(uSunDir)), 0.0);
+    float light = uAmbient + (1.0 - uAmbient) * diffuse;
+    FragColor = vec4(baseColor * light, 1.0);
+}
+)";
+
+    const unsigned int vertexShader = compileShader(GL_VERTEX_SHADER, vertexSource, "Model Vertex");
+    if(vertexShader == 0) { return false; }
+
+    const unsigned int fragmentShader = compileShader(GL_FRAGMENT_SHADER, fragmentSource, "Model Fragment");
+    if(fragmentShader == 0) { glDeleteShader(vertexShader); return false; }
+
+    modelShaderProgram_ = glCreateProgram();
+    glAttachShader(modelShaderProgram_, vertexShader);
+    glAttachShader(modelShaderProgram_, fragmentShader);
+    glLinkProgram(modelShaderProgram_);
+
+    glDeleteShader(vertexShader);
+    glDeleteShader(fragmentShader);
+
+    int success = 0;
+    glGetProgramiv(modelShaderProgram_, GL_LINK_STATUS, &success);
+    if(success == 0) {
+        std::array<char, 1024> infoLog{};
+        glGetProgramInfoLog(modelShaderProgram_, static_cast<int>(infoLog.size()), nullptr, infoLog.data());
+        std::cerr << "Model shader program linking failed: " << infoLog.data() << '\n';
+        glDeleteProgram(modelShaderProgram_); modelShaderProgram_ = 0; return false;
+    }
+
+    modelMvpUniform_ = glGetUniformLocation(modelShaderProgram_, "uMvp");
+    modelSunDirUniform_ = glGetUniformLocation(modelShaderProgram_, "uSunDir");
+    modelAmbientUniform_ = glGetUniformLocation(modelShaderProgram_, "uAmbient");
+    modelTextureUniform_ = glGetUniformLocation(modelShaderProgram_, "uTexture");
+    modelHasTextureUniform_ = glGetUniformLocation(modelShaderProgram_, "uHasTexture");
+    modelBaseColorUniform_ = glGetUniformLocation(modelShaderProgram_, "uBaseColor");
+    if (modelMvpUniform_ < 0 || modelSunDirUniform_ < 0 || modelAmbientUniform_ < 0 ||
+        modelTextureUniform_ < 0 || modelHasTextureUniform_ < 0 || modelBaseColorUniform_ < 0) {
+        std::cerr << "Model shader program is missing required uniforms\n";
+        glDeleteProgram(modelShaderProgram_); modelShaderProgram_ = 0; return false;
+    }
+
+    return true;
+}
+
 bool Renderer::createCubeShaderProgram() {
     constexpr const char* vertexSource = R"(
 #version 330 core
@@ -949,6 +1034,24 @@ bool Renderer::loadCollectibleTextures() {
     return true;
 }
 
+bool Renderer::loadGLTFModels() {
+    constexpr float kConeHeight = 1.0f;
+    constexpr float kBarrierHeight = 0.9f;
+    constexpr float kTrashCanHeight = 0.75f;
+    constexpr float kBenchHeight = 0.7f;
+
+    if (!trafficConeModel_.load(std::string(ASSETS_DIR) + "/models/traffic_cone/scene.gltf", kConeHeight)) { return false; }
+    if (!barrierModel_.load(std::string(ASSETS_DIR) + "/models/barrier/scene.gltf", kBarrierHeight)) { return false; }
+    if (!trashCanModel_.load(std::string(ASSETS_DIR) + "/models/trash_can/scene.gltf", kTrashCanHeight)) { return false; }
+    if (!benchModel_.load(std::string(ASSETS_DIR) + "/models/bench/scene.gltf", kBenchHeight)) { return false; }
+
+    std::cout << "Loaded GLTF models: cone(" << trafficConeModel_.primitives().size() << " prims), "
+              << "barrier(" << barrierModel_.primitives().size() << " prims), "
+              << "trashcan(" << trashCanModel_.primitives().size() << " prims), "
+              << "bench(" << benchModel_.primitives().size() << " prims)\n";
+    return true;
+}
+
 unsigned int Renderer::getCollectibleTexture(const Entity& entity, float& outAspect) const {
     if (entity.type == EntityType::SlowCollectible) {
         const SpriteTexture* tex = nullptr;
@@ -974,7 +1077,6 @@ unsigned int Renderer::getCollectibleTexture(const Entity& entity, float& outAsp
 void Renderer::drawWorld(float playerX, float roadScroll, float gameTime, const std::vector<Entity>& entities,
                          const std::vector<CollectEffect>& collectEffects) {
     constexpr Color playerColor = {0.12f, 0.55f, 1.0f};
-    constexpr Color obstacleColor = {0.95f, 0.08f, 0.06f};
 
     const float aspectRatio = static_cast<float>(std::max(1, drawableWidth_)) /
                               static_cast<float>(std::max(1, drawableHeight_));
@@ -1168,9 +1270,12 @@ void Renderer::drawWorld(float playerX, float roadScroll, float gameTime, const 
     }
 
     constexpr Color sidewalkColor = {0.42f, 0.42f, 0.45f};
-    constexpr float sidewalkY = -0.03f;
+    constexpr Color curbColor = {0.34f, 0.34f, 0.37f};
+    constexpr float sidewalkTopY = 0.04f;
+    constexpr float roadSurfaceY = -0.04f;
     constexpr float sidewalkWidth = 0.75f;
     constexpr float sidewalkSigns[] = {-1.0f, 1.0f};
+    constexpr float kCurbThickness = 0.04f;
 
     for (int segment = 0; segment < kLaneSegmentCount; ++segment) {
         const float segmentZ = kLaneStartZ + scrollOffset + static_cast<float>(segment) * kLaneSegmentLength;
@@ -1182,12 +1287,34 @@ void Renderer::drawWorld(float playerX, float roadScroll, float gameTime, const 
                 const float centerX = sideSign * (roadHalfEdge + sidewalkHalfWidth) * 0.5f +
                                       worldLateralOffset(centerZ);
                 drawColoredQuad(viewProj.values, sidewalkColor,
-                                {centerX, sidewalkY - worldCurvatureDrop(centerZ), centerZ,
+                                {centerX, sidewalkTopY - worldCurvatureDrop(centerZ), centerZ,
                                  sidewalkWidth, subLength, 1.0f},
                                 static_cast<int>(Face::Top), roadLight);
             }
         }
     }
+
+    glUseProgram(cubeShaderProgram_);
+    glBindVertexArray(cubeVao_);
+    {
+        const float curbHeight = sidewalkTopY - roadSurfaceY;
+        for (int segment = 0; segment < kLaneSegmentCount; ++segment) {
+            const float segmentZ = kLaneStartZ + scrollOffset + static_cast<float>(segment) * kLaneSegmentLength;
+            for (int sub = 0; sub < kRoadSubdivisions; ++sub) {
+                const float centerZ = segmentZ + (static_cast<float>(sub) + 0.5f) * subLength;
+                for (float sideSign : sidewalkSigns) {
+                    const float curbX = sideSign * roadHalfEdge + worldLateralOffset(centerZ);
+                    const float curbY = (roadSurfaceY + sidewalkTopY) * 0.5f - worldCurvatureDrop(centerZ);
+                    drawCube(viewProj.values,
+                             {curbX, curbY, centerZ,
+                              kCurbThickness, curbHeight, subLength},
+                             curbColor);
+                }
+            }
+        }
+    }
+    glUseProgram(shaderProgram_);
+    glBindVertexArray(quadVao_);
 
     glDepthMask(GL_FALSE);
 
@@ -1206,10 +1333,18 @@ void Renderer::drawWorld(float playerX, float roadScroll, float gameTime, const 
 
     for(const Entity& entity : entities){
         if(entity.type == EntityType::Obstacle) {
-            drawShadow(viewProj.values, laneToX(entity.lane) + worldLateralOffset(entity.z), entity.z,
-                       1.0f, 0.55f, -0.035f, 0.30f);
-            drawSunShadow(viewProj.values, laneToX(entity.lane) + worldLateralOffset(entity.z), entity.z,
-                          0.95f, 0.9f, 0.9f, -0.035f, 0.22f);
+            const bool isCone = (entity.textureIndex % 2 == 0);
+            if (isCone) {
+                drawShadow(viewProj.values, laneToX(entity.lane) + worldLateralOffset(entity.z), entity.z,
+                           1.0f, 0.9f, -0.035f, 0.30f);
+                drawSunShadow(viewProj.values, laneToX(entity.lane) + worldLateralOffset(entity.z), entity.z,
+                              0.85f, 0.9f, 0.9f, -0.035f, 0.22f);
+            } else {
+                drawShadow(viewProj.values, laneToX(entity.lane) + worldLateralOffset(entity.z), entity.z,
+                           2.6f, 0.6f, -0.035f, 0.30f);
+                drawSunShadow(viewProj.values, laneToX(entity.lane) + worldLateralOffset(entity.z), entity.z,
+                              0.8f, 2.6f, 0.7f, -0.035f, 0.22f);
+            }
         } else {
             drawShadow(viewProj.values, laneToX(entity.lane) + worldLateralOffset(entity.z), entity.z,
                        1.1f, 0.6f, -0.035f, 0.30f);
@@ -1226,15 +1361,56 @@ void Renderer::drawWorld(float playerX, float roadScroll, float gameTime, const 
     drawCube(viewProj.values, {playerX + worldLateralOffset(kPlayerZ), kPlayerScale * 0.5f, kPlayerZ,
                                kPlayerScale, kPlayerScale, kPlayerScale}, playerColor);
 
-    for(const Entity& entity : entities){
-        if(entity.type == EntityType::Obstacle) {
-            drawCube(viewProj.values, {laneToX(entity.lane) + worldLateralOffset(entity.z),
-                                       0.48f - worldCurvatureDrop(entity.z),
-                                       entity.z, 0.95f, 0.95f, 0.95f}, obstacleColor);
+    glBindVertexArray(0);
+    glUseProgram(modelShaderProgram_);
+
+    const float decorCenterX = (roadHalfEdge + sidewalkHalfWidth) * 0.5f;
+
+    constexpr float kDecorSpacing = 8.0f;
+    constexpr float kDecorNearZ = -86.0f;
+    constexpr float kDecorFarZ = 12.0f;
+    const int decorFirstI = static_cast<int>(std::floor((roadScroll - kDecorFarZ) / kDecorSpacing));
+    const int decorLastI = static_cast<int>(std::ceil((roadScroll - kDecorNearZ) / kDecorSpacing));
+
+    for (int i = decorFirstI; i <= decorLastI; ++i) {
+        const unsigned int seed = static_cast<unsigned int>(i) * 61u;
+        if (hashFloat(seed, 0) > 0.6f) { continue; }
+
+        const float zJitter = (hashFloat(seed, 1) - 0.5f) * 2.0f;
+        const float propZ = roadScroll - static_cast<float>(i) * kDecorSpacing + zJitter;
+        const float sideSign = hashFloat(seed, 2) < 0.5f ? -1.0f : 1.0f;
+        const float xJitter = (hashFloat(seed, 3) - 0.5f) * 0.4f;
+        const float propX = sideSign * (decorCenterX + xJitter) + worldLateralOffset(propZ);
+        const float propY = sidewalkTopY - worldCurvatureDrop(propZ);
+
+        if (hashFloat(seed, 4) < 0.45f) {
+            drawGLTFModel(viewProj.values, benchModel_,
+                          {propX, propY, propZ, 1.0f, 1.0f, 1.0f});
+        } else {
+            drawGLTFModel(viewProj.values, trashCanModel_,
+                          {propX, propY, propZ, 1.6f, 1.6f, 1.6f});
         }
     }
 
-    glDepthMask(GL_FALSE);
+    for(const Entity& entity : entities){
+        if(entity.type == EntityType::Obstacle) {
+            const GLTFModel& model = (entity.textureIndex % 2 == 0) ? trafficConeModel_ : barrierModel_;
+            const bool isCone = (&model == &trafficConeModel_);
+            const float obstacleX = laneToX(entity.lane) + worldLateralOffset(entity.z);
+            const float obstacleY = -worldCurvatureDrop(entity.z);
+            if (isCone) {
+                drawGLTFModel(viewProj.values, model,
+                              {obstacleX, obstacleY, entity.z,
+                               1.0f, 1.0f, 1.0f});
+            } else {
+                drawGLTFModel(viewProj.values, model,
+                              {obstacleX, obstacleY, entity.z,
+                               0.75f * 0.9f, 0.9f, 0.9f});
+            }
+        }
+    }
+
+    glDepthMask(GL_TRUE);
     glUseProgram(spriteShaderProgram_);
     glBindVertexArray(quadVao_);
 
@@ -1285,6 +1461,38 @@ void Renderer::drawCube(const std::array<float, 16>& viewProj, const Transform& 
     glUniform3f(cubeSunDirUniform_, kSunDir.x, kSunDir.y, kSunDir.z);
     glUniform1f(cubeAmbientUniform_, kSunAmbient);
     glDrawArrays(GL_TRIANGLES, 0, 36);
+}
+
+void Renderer::drawGLTFModel(const std::array<float, 16>& viewProj, const GLTFModel& model,
+                             const Transform& transform) const {
+    const Mat4 modelMatrix = multiply(
+        translation({transform.x, transform.y, transform.z}),
+        scale({transform.scaleX, transform.scaleY, transform.scaleZ})
+    );
+    Mat4 vp;
+    vp.values = viewProj;
+    const Mat4 mvp = multiply(vp, modelMatrix);
+
+    glUniformMatrix4fv(modelMvpUniform_, 1, GL_FALSE, mvp.values.data());
+    glUniform3f(modelSunDirUniform_, kSunDir.x, kSunDir.y, kSunDir.z);
+    glUniform1f(modelAmbientUniform_, kSunAmbient);
+
+    for (const GLTFModel::Primitive& primitive : model.primitives()) {
+        if (primitive.indexCount <= 0) { continue; }
+        glUniform1f(modelHasTextureUniform_, primitive.material.hasTexture ? 1.0f : 0.0f);
+        glUniform3f(modelBaseColorUniform_, primitive.material.baseColor[0],
+                    primitive.material.baseColor[1], primitive.material.baseColor[2]);
+        if (primitive.material.hasTexture) {
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, primitive.material.textureId);
+            glUniform1i(modelTextureUniform_, 0);
+        }
+        glBindVertexArray(primitive.vao);
+        glDrawElements(GL_TRIANGLES, primitive.indexCount, GL_UNSIGNED_INT, nullptr);
+    }
+
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glBindVertexArray(0);
 }
 
 void Renderer::drawTexturedQuad(const std::array<float, 16>& viewProj, unsigned int texture, const Transform& transform,
@@ -1555,7 +1763,7 @@ void Renderer::drawCollectEffect(const std::array<float, 16>& viewProj, const Co
 
 void Renderer::drawSprite(const std::array<float, 16>& viewProj, unsigned int texture, const Transform& transform,
                           const float rippleColor[3], float spawnTime, float gameTime, float texAspect) const {
-    float bobY = transform.y + std::sin(gameTime * 3.0f + spawnTime) * 0.08f;
+    const float bobY = transform.y + std::sin(gameTime * 3.0f + spawnTime) * 0.08f;
 
     float scaleX = transform.scaleX;
     float scaleY = transform.scaleY;
@@ -1565,10 +1773,11 @@ void Renderer::drawSprite(const std::array<float, 16>& viewProj, unsigned int te
         scaleX = scaleX * texAspect;
     }
 
-    const Mat4 model = multiply(
-        translation({transform.x, bobY, transform.z}),
-        scale({scaleX, scaleY, transform.scaleZ})
-    );
+    glUseProgram(spriteShaderProgram_);
+    glBindVertexArray(quadVao_);
+
+    const Mat4 model = multiply(translation({transform.x, bobY, transform.z}),
+                                multiply(rotateY(gameTime * 1.4f + spawnTime), scale({scaleX, scaleY, 1.0f})));
     Mat4 vp;
     vp.values = viewProj;
     const Mat4 mvp = multiply(vp, model);
@@ -1582,7 +1791,6 @@ void Renderer::drawSprite(const std::array<float, 16>& viewProj, unsigned int te
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, texture);
     glUniform1i(spriteTextureUniform_, 0);
-
     glDrawArrays(GL_TRIANGLES, 0, 6);
 }
 
@@ -1602,6 +1810,11 @@ void Renderer::shutdownGraphics(){
     if(spriteShaderProgram_!=0){ glDeleteProgram(spriteShaderProgram_); spriteShaderProgram_ = 0; }
     if(skyShaderProgram_!=0){ glDeleteProgram(skyShaderProgram_); skyShaderProgram_ = 0; }
     if(sunShaderProgram_!=0){ glDeleteProgram(sunShaderProgram_); sunShaderProgram_ = 0; }
+    if(modelShaderProgram_!=0){ glDeleteProgram(modelShaderProgram_); modelShaderProgram_ = 0; }
+    trashCanModel_.release();
+    trafficConeModel_.release();
+    barrierModel_.release();
+    benchModel_.release();
     if(cubeShaderProgram_!=0){ glDeleteProgram(cubeShaderProgram_); cubeShaderProgram_ = 0; }
     if(cubeVbo_!=0) { glDeleteBuffers(1, &cubeVbo_); cubeVbo_ = 0; }
     if(cubeVao_!=0){ glDeleteVertexArrays(1, &cubeVao_); cubeVao_ = 0; }

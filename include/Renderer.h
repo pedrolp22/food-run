@@ -2,6 +2,7 @@
 #define SUBWAY_RENDERER_H
 
 #include "GameConfig.h"
+#include "GLTFModel.h"
 
 #include <SDL2/SDL.h>
 
@@ -73,11 +74,15 @@ private:
     bool createCubeMesh();
     bool createQuadMesh();
     bool createRoadShaderProgram();
+    bool createModelShaderProgram();
     bool loadCollectibleTextures();
+    bool loadGLTFModels();
 
     void drawWorld(float playerX, float roadScroll, float gameTime, const std::vector<Entity>& entities,
                    const std::vector<CollectEffect>& collectEffects);
     void drawCube(const std::array<float, 16>& viewProj, const Transform& transform, const Color& color) const;
+    void drawGLTFModel(const std::array<float, 16>& viewProj, const GLTFModel& model,
+                       const Transform& transform) const;
     void drawTexturedQuad(const std::array<float, 16>& viewProj, unsigned int texture,
                           const Transform& transform, int face, float texScaleU, float texScaleV,
                           float lightFactor, float alpha = 1.0f) const;
@@ -150,6 +155,19 @@ private:
 
     unsigned int quadVao_;
     unsigned int quadVbo_;
+
+    unsigned int modelShaderProgram_;
+    int modelMvpUniform_;
+    int modelSunDirUniform_;
+    int modelAmbientUniform_;
+    int modelTextureUniform_;
+    int modelHasTextureUniform_;
+    int modelBaseColorUniform_;
+
+    GLTFModel trashCanModel_;
+    GLTFModel trafficConeModel_;
+    GLTFModel barrierModel_;
+    GLTFModel benchModel_;
 
     SpriteTexture roadTexture_;
     SpriteTexture skyscraperTexture_;
