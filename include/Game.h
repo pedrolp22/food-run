@@ -1,56 +1,22 @@
-//
-// Created by pedroleonardo on 19/08/2026.
-//
+#pragma once
 
-#ifndef SUBWAY_GAME_H
-#define SUBWAY_GAME_H
-
-#include "GameConfig.h"
 #include "Renderer.h"
+#include "engine/time/FixedStep.h"
+#include "game/Simulation.h"
 
-#include <random>
-#include <vector>
-
+// Application shell: input, timing, presentation. Simulation contains the game rules.
 class Game {
-public:
-    Game();
-
+  public:
+    Game() = default;
     int run();
 
-private:
+  private:
     void handleEvents();
-    void update(float deltaTime);
-    void updatePlayer(float deltaTime);
-    void updateWorld(float deltaTime);
-    void updateEntities(float deltaTime);
-    void updateCollisions();
-    void spawnEntity();
     void resetGame();
     void updateWindowTitle();
-
-    float laneToX(int lane) const;
-
     Renderer renderer_;
-    bool running_;
-    bool gameOver_;
-
-    int targetLane_;
-    float playerX_;
-    float speed_;
-    float spawnTimer_;
-    float roadScroll_;
-    float titleUpdateTimer_;
-    float scoreAccumulator_;
-    int score_;
-    int health_;
-    int purpleStreak_;
-
-    std::vector<Renderer::Entity> entities_;
-    std::vector<Renderer::CollectEffect> collectEffects_;
-    std::mt19937 randomEngine_;
-    float gameTime_;
-    float accumulator_;
+    game::Simulation simulation_;
+    engine::time::FixedStep clock_;
+    bool running_ = false;
+    float titleUpdateTimer_ = 0;
 };
-
-
-#endif //SUBWAY_GAME_H

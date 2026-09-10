@@ -1,0 +1,24 @@
+#pragma once
+
+#include "GameConfig.h"
+#include "game/Entities.h"
+#include <vector>
+
+namespace game {
+struct GameState {
+    bool gameOver = false;
+    int targetLane = 1;
+    float playerX = GameConfig::kLanePositions[1];
+    float speed = GameConfig::kInitialSpeed;
+    float roadScroll = 0;
+    float time = 0;
+    int score = 0;
+    int health = GameConfig::kMaxHealth;
+    int purpleStreak = 0;
+    std::vector<Entity> entities;
+    std::vector<CollectEffect> collectEffects;
+};
+float laneToX(int lane);
+// Deterministic domain operation, independent of rendering, input and wall-clock time.
+void resolveCollisions(GameState& state);
+} // namespace game

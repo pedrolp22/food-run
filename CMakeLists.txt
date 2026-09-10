@@ -1,42 +1,90 @@
-cmake_minimum_required(VERSION 4.2)
-project(subway)
+cmake_minimum_required(VERSION 3.20)
+project(subway VERSION 0.1.0 LANGUAGES C CXX)
 
-set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(subway_top_level OFF)
+if(CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
+    set(subway_top_level ON)
+endif()
+option(SUBWAY_BUILD_GRAPHICS "Build the OpenGL renderer" ON)
+option(SUBWAY_BUILD_PLATFORM "Build the SDL window layer" ${SUBWAY_BUILD_GRAPHICS})
+option(SUBWAY_BUILD_GAME "Build the Subway application" ${subway_top_level})
+option(SUBWAY_BUILD_EXAMPLES "Build the independent renderer example" OFF)
+option(SUBWAY_BUILD_TESTS "Build CPU tests" ${subway_top_level})
+option(SUBWAY_ENABLE_GRAPHICS_TESTS "Enable graphics tests (requires an OpenGL display)" OFF)
+set(SUBWAY_ASSET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/assets" CACHE PATH "Default game asset directory")
 
-find_package(SDL2 REQUIRED)
+function(subway_library target alias)
+    add_library(${target} STATIC ${ARGN})
+    add_library(subway::${alias} ALIAS ${target})
+    target_compile_features(${target} PUBLIC cxx_std_20)
+    target_include_directories(${target} PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /W4)
+    else()
+        target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+endfunction()
 
-add_library(glad STATIC
-        external/glad/glad.c
-        external/stb_image_impl.c)
+subway_library(subway_math math src/engine/math/Math.cpp src/engine/math/TrackCurve.cpp)
+subway_library(subway_assets assets src/engine/assets/Json.cpp src/engine/assets/GltfLoader.cpp)
+target_link_libraries(subway_assets PUBLIC subway::math)
+subway_library(subway_gameplay gameplay src/game/Simulation.cpp src/game/Collision.cpp)
+set_target_properties(subway_gameplay PROPERTIES EXCLUDE_FROM_ALL TRUE)
 
-target_include_directories(glad
-        PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/external)
+if(SUBWAY_BUILD_GRAPHICS OR SUBWAY_BUILD_PLATFORM)
+    add_library(subway_glad STATIC external/glad/glad.c)
+    target_include_directories(subway_glad SYSTEM PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/external")
+endif()
 
-add_executable(subway
-        main.cpp
-        src/Game.cpp
-        include/Game.h
-        include/GameConfig.h
-        src/Renderer.cpp
-        include/Renderer.h
-        src/GLTFModel.cpp
-        include/GLTFModel.h)
+if(SUBWAY_BUILD_GRAPHICS)
+    add_library(subway_stb STATIC external/stb_image_impl.c)
+    target_include_directories(subway_stb SYSTEM PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/external")
+    include(cmake/EmbedShaders.cmake)
+    subway_embed_shaders("${CMAKE_CURRENT_BINARY_DIR}/generated")
+    subway_library(subway_graphics graphics
+        src/engine/graphics/ShaderProgram.cpp src/engine/graphics/Texture.cpp src/engine/graphics/TextureSampler.cpp
+        src/engine/graphics/Mesh.cpp src/engine/graphics/BuiltinMeshes.cpp
+        src/engine/graphics/RenderTarget.cpp src/engine/graphics/Model.cpp
+        src/engine/graphics/Scene.cpp src/engine/graphics/SceneRenderer.cpp)
+    target_include_directories(subway_graphics PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
+    target_link_libraries(subway_graphics PUBLIC subway::assets subway::math PRIVATE subway_glad subway_stb)
+endif()
 
-target_include_directories(subway
-        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+if(SUBWAY_BUILD_PLATFORM)
+    find_package(SDL2 REQUIRED)
+    subway_library(subway_platform platform src/engine/platform/Window.cpp)
+    target_link_libraries(subway_platform PRIVATE subway_glad)
+    target_compile_definitions(subway_platform PUBLIC SDL_MAIN_HANDLED)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(subway_platform PUBLIC SDL2::SDL2)
+    else()
+        target_include_directories(subway_platform SYSTEM PUBLIC ${SDL2_INCLUDE_DIRS})
+        target_link_libraries(subway_platform PUBLIC ${SDL2_LIBRARIES})
+    endif()
+endif()
 
-target_compile_definitions(subway PRIVATE ASSETS_DIR="${CMAKE_SOURCE_DIR}/assets")
-
-target_link_libraries(subway
-        PRIVATE glad)
-
-if (TARGET SDL2::SDL2)
-    target_link_libraries(subway
-            PRIVATE SDL2::SDL2)
-else()
-    target_include_directories(subway
-            PRIVATE ${SDL2_INCLUDE_DIRS})
-    target_link_libraries(subway
-            PRIVATE ${SDL2_LIBRARIES})
+if(SUBWAY_BUILD_GAME OR SUBWAY_ENABLE_GRAPHICS_TESTS)
+    if(NOT SUBWAY_BUILD_GRAPHICS OR NOT SUBWAY_BUILD_PLATFORM)
+        message(FATAL_ERROR "Game/graphics tests require graphics and platform libraries")
+    endif()
+    subway_library(subway_world world src/game/GameAssets.cpp src/game/WorldScene.cpp src/game/SceneCommands.cpp)
+    target_link_libraries(subway_world PUBLIC subway::graphics subway::gameplay)
+endif()
+if(SUBWAY_BUILD_GAME)
+    subway_library(subway_application application src/Game.cpp src/Renderer.cpp)
+    target_compile_definitions(subway_application PRIVATE SUBWAY_ASSET_DIR="${SUBWAY_ASSET_DIR}")
+    target_link_libraries(subway_application PUBLIC subway::world subway::platform)
+    add_executable(subway main.cpp)
+    target_link_libraries(subway PRIVATE subway::application)
+endif()
+if(SUBWAY_BUILD_TESTS OR SUBWAY_ENABLE_GRAPHICS_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()
+if(SUBWAY_BUILD_EXAMPLES)
+    if(NOT SUBWAY_BUILD_GRAPHICS OR NOT SUBWAY_BUILD_PLATFORM)
+        message(FATAL_ERROR "Examples require graphics and platform libraries")
+    endif()
+    add_executable(renderer_example examples/renderer_example.cpp)
+    target_link_libraries(renderer_example PRIVATE subway::graphics subway::platform)
 endif()
