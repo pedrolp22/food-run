@@ -235,12 +235,19 @@ Vec3 transformPoint(const Mat4& m, const Vec3& p) {
 }
 
 Vec3 transformNormal(const Mat4& m, const Vec3& n) {
-    const float x = m.v[0] * n.x + m.v[4] * n.y + m.v[8] * n.z;
-    const float y = m.v[1] * n.x + m.v[5] * n.y + m.v[9] * n.z;
-    const float z = m.v[2] * n.x + m.v[6] * n.y + m.v[10] * n.z;
+    // Normals use the inverse transpose, including nonuniform or mirrored node scales.
+    const float a = m.v[0], b = m.v[4], c = m.v[8];
+    const float d = m.v[1], e = m.v[5], f = m.v[9];
+    const float g = m.v[2], h = m.v[6], i = m.v[10];
+    const float determinant = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+    if (std::abs(determinant) < 1e-12f) { return {0.0f, 1.0f, 0.0f}; }
+    const float x = (e * i - f * h) * n.x + (f * g - d * i) * n.y + (d * h - e * g) * n.z;
+    const float y = (c * h - b * i) * n.x + (a * i - c * g) * n.y + (b * g - a * h) * n.z;
+    const float z = (b * f - c * e) * n.x + (c * d - a * f) * n.y + (a * e - b * d) * n.z;
     const float len = std::sqrt(x * x + y * y + z * z);
-    if (len <= 0.0001f) { return {0.0f, 1.0f, 0.0f}; }
-    return {x / len, y / len, z / len};
+    if (len <= 1e-12f) { return {0.0f, 1.0f, 0.0f}; }
+    const float sign = determinant < 0.0f ? -1.0f : 1.0f;
+    return {sign * x / len, sign * y / len, sign * z / len};
 }
 
 std::string parentDirectory(const std::string& path) {

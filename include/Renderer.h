@@ -62,6 +62,12 @@ private:
         int height = 0;
     };
 
+    struct LightingUniforms {
+        int model = -1;
+        int lightViewProj = -1;
+        int shadowMap = -1;
+    };
+
     bool setOpenGLAttributes() const;
     bool createWindow();
     bool createOpenGLContext();
@@ -78,23 +84,27 @@ private:
     bool createQuadMesh();
     bool createRoadShaderProgram();
     bool createModelShaderProgram();
+    bool createShadowResources();
     bool loadCollectibleTextures();
     bool loadGLTFModels();
 
     void drawWorld(float playerX, float roadScroll, float gameTime, const std::vector<Entity>& entities,
                    const std::vector<CollectEffect>& collectEffects);
-    void drawCube(const std::array<float, 16>& viewProj, const Transform& transform, const Color& color) const;
+    void drawCube(const std::array<float, 16>& viewProj, const Transform& transform, const Color& color,
+                  bool followsGround = false) const;
     void drawGLTFModel(const std::array<float, 16>& viewProj, const GLTFModel& model,
                        const Transform& transform) const;
     void drawTexturedQuad(const std::array<float, 16>& viewProj, unsigned int texture,
                           const Transform& transform, int face, float texScaleU, float texScaleV,
                           float lightFactor, float alpha = 1.0f) const;
     void drawColoredQuad(const std::array<float, 16>& viewProj, const Color& color,
-                         const Transform& transform, int face, float lightFactor, float alpha = 1.0f) const;
+                         const Transform& transform, int face, float lightFactor, float alpha = 1.0f,
+                         bool receivesShadow = true, bool followsGround = false) const;
     void drawSprite(const std::array<float, 16>& viewProj, unsigned int texture, const Transform& transform,
                     const float rippleColor[3], float spawnTime, float gameTime, float texAspect) const;
-    void drawSunShadow(const std::array<float, 16>& viewProj, float centerX, float centerZ,
-                       float height, float width, float depth, float y, float alpha) const;
+    void applyLighting(const LightingUniforms& uniforms, const std::array<float, 16>& model) const;
+    void prepareShadowDraw(const std::array<float, 16>& model, unsigned int texture = 0,
+                           float opacity = 1.0f) const;
     void drawSun(const std::array<float, 16>& viewProj) const;
     void drawCollectEffect(const std::array<float, 16>& viewProj, const CollectEffect& effect,
                            float gameTime) const;
@@ -119,6 +129,9 @@ private:
     int mvpUniform_;
     int colorUniform_;
     int alphaUniform_;
+    int plainLightUniform_ = -1;
+    int plainAmbientUniform_ = -1;
+    int plainReceivesShadowUniform_ = -1;
 
     unsigned int cubeShaderProgram_;
     int cubeMvpUniform_;
@@ -152,6 +165,7 @@ private:
     int roadTexOffsetUniform_;
     int roadLodUniform_;
     int roadLightUniform_;
+    int roadAmbientUniform_ = -1;
     int roadAlphaUniform_;
     int roadTimeUniform_;
     int roadHeatUniform_;
@@ -202,6 +216,20 @@ private:
     int modelSnapUniform_;
     int roadAffineUniform_;
     int modelAffineUniform_;
+
+    LightingUniforms plainLighting_;
+    LightingUniforms cubeLighting_;
+    LightingUniforms roadLighting_;
+    LightingUniforms modelLighting_;
+    unsigned int shadowFbo_ = 0;
+    unsigned int shadowDepthTexture_ = 0;
+    unsigned int shadowShaderProgram_ = 0;
+    int shadowMvpUniform_ = -1;
+    int shadowTextureUniform_ = -1;
+    int shadowTexturedUniform_ = -1;
+    int shadowOpacityUniform_ = -1;
+    std::array<float, 16> lightViewProj_{};
+    bool shadowPass_ = false;
 };
 
 

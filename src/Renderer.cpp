@@ -17,6 +17,7 @@ constexpr int kWindowWidth = 720;
 constexpr int kWindowHeight = 1280;
 constexpr int kRetroWidth = 480;
 constexpr int kRetroHeight = 640;
+constexpr int kShadowMapSize = 2048;
 constexpr int kOpenGLMajorVersion = 4;
 constexpr int kOpenGLMinorVersion = 6;
 constexpr int kVsyncEnabled = 1;
@@ -54,14 +55,47 @@ Vec3 normalize(const Vec3& value) {
     return {value.x / length, value.y / length, value.z / length};
 }
 
-constexpr float kSunAmbient = 0.35f;
-const Vec3 kSunDir = normalize({-0.7f, 1.4f, 0.9f});
+constexpr float kSunAmbient = 0.48f;
+// Direction from a surface toward the sun, shared by lighting, shadows and the sky.
+const Vec3 kSunDir = normalize({-0.7f, 1.4f, -0.9f});
 constexpr float kRetroAffineStrength = 0.3f;
 constexpr float kRoadAffineStrength = 0.1f;
 
+constexpr const char* kShadowSampling = R"(
+in vec4 vShadowPosition;
+uniform sampler2DShadow uShadowMap;
+
+float sunVisibility(float diffuse) {
+    vec3 projected = vShadowPosition.xyz / vShadowPosition.w * 0.5 + 0.5;
+    if (any(lessThanEqual(projected, vec3(0.0))) || any(greaterThanEqual(projected, vec3(1.0)))) {
+        return 1.0;
+    }
+    float bias = mix(0.00035, 0.00006, clamp(diffuse, 0.0, 1.0));
+    vec2 texel = 1.0 / vec2(textureSize(uShadowMap, 0));
+    float visibility = 0.0;
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+            visibility += texture(uShadowMap, vec3(projected.xy + vec2(x, y) * texel,
+                                                   projected.z - bias));
+        }
+    }
+    return visibility / 9.0;
+}
+
+float shadowedLight(float light, float ambient) {
+    float direct = max(light - ambient, 0.0);
+    return min(light, ambient) + direct * sunVisibility(direct / (1.0 - ambient));
+}
+)";
+
+float ambientForNormal(const Vec3& n) {
+    return kSunAmbient * (0.95f + 0.30f * n.y);
+}
+
 float faceLightForNormal(const Vec3& n) {
     const float d = std::max(0.0f, dot(n, kSunDir));
-    return kSunAmbient + (1.0f - kSunAmbient) * d;
+    const float ambient = ambientForNormal(n);
+    return ambient + (1.0f - ambient) * d;
 }
 
 Mat4 identity() {
@@ -140,6 +174,21 @@ float worldLateralOffset(float z) {
     return GameConfig::kRoadSway * arc * worldCurvatureEase(z);
 }
 
+Vec3 groundNormal(float z, float length) {
+    return normalize({0.0f, 1.0f,
+                      (worldCurvatureDrop(z + length * 0.5f) - worldCurvatureDrop(z - length * 0.5f)) / length});
+}
+
+void bendGroundSegment(Mat4& model, float z, float length, int axis) {
+    const float nearZ = z + length * 0.5f;
+    const float farZ = z - length * 0.5f;
+    // Adjacent segments share endpoints, so receivers have no steps or shadow seams.
+    model.values[axis * 4] = worldLateralOffset(nearZ) - worldLateralOffset(farZ);
+    model.values[axis * 4 + 1] = worldCurvatureDrop(farZ) - worldCurvatureDrop(nearZ);
+    model.values[12] += (worldLateralOffset(nearZ) + worldLateralOffset(farZ)) * 0.5f - worldLateralOffset(z);
+    model.values[13] += worldCurvatureDrop(z) - (worldCurvatureDrop(nearZ) + worldCurvatureDrop(farZ)) * 0.5f;
+}
+
 Mat4 rotateY(float angleRadians) {
     const float cosine = std::cos(angleRadians);
     const float sine = std::sin(angleRadians);
@@ -190,7 +239,27 @@ Mat4 lookAt(const Vec3& eye, const Vec3& center, const Vec3& up) {
     return result;
 }
 
-unsigned int compileShader(unsigned int shaderType, const char* source, const char* label) {
+Mat4 sunViewProjection() {
+    const Vec3 center = {0.0f, 4.0f, -32.0f};
+    const Mat4 view = lookAt({center.x + kSunDir.x * 100.0f,
+                              center.y + kSunDir.y * 100.0f,
+                              center.z + kSunDir.z * 100.0f}, center, {0.0f, 1.0f, 0.0f});
+    // Fixed world bounds keep the shadow texel grid stable as the road scrolls.
+    Mat4 projection = identity();
+    projection.values[0] = 1.0f / 76.0f;
+    projection.values[5] = 1.0f / 88.0f;
+    projection.values[10] = -2.0f / 199.0f;
+    projection.values[14] = -201.0f / 199.0f;
+    return multiply(projection, view);
+}
+
+unsigned int compileShader(unsigned int shaderType, const char* source, const char* label,
+                           const char* sharedSource = nullptr) {
+    std::string combinedSource(source);
+    if (sharedSource) {
+        combinedSource.insert(combinedSource.find('\n', combinedSource.find("#version")) + 1, sharedSource);
+    }
+    source = combinedSource.c_str();
     const unsigned int shader = glCreateShader(shaderType);
     glShaderSource(shader, 1, &source, nullptr);
     glCompileShader(shader);
@@ -341,6 +410,27 @@ void Renderer::toggleRetroMode() {
 void Renderer::render(float playerX, float roadScroll, float gameTime, const std::vector<Entity>& entities,
                       const std::vector<CollectEffect>& collectEffects) {
     if(!window_ || shaderProgram_ == 0) { return; }
+    if (drawableWidth_ <= 0 || drawableHeight_ <= 0) { return; }
+
+    // Use the same geometry and transforms in both passes and both display modes.
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glActiveTexture(GL_TEXTURE0);
+    glBindFramebuffer(GL_FRAMEBUFFER, shadowFbo_);
+    glViewport(0, 0, kShadowMapSize, kShadowMapSize);
+    glEnable(GL_DEPTH_TEST);
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(1.5f, 2.0f);
+    glClear(GL_DEPTH_BUFFER_BIT);
+    shadowPass_ = true;
+    drawWorld(playerX, roadScroll, gameTime, entities, collectEffects);
+    shadowPass_ = false;
+    glDisable(GL_POLYGON_OFFSET_FILL);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
     if (retroMode_ && retroFbo_ != 0) {
         glBindFramebuffer(GL_FRAMEBUFFER, retroFbo_);
@@ -453,7 +543,7 @@ bool Renderer::initializeGraphics() {
     return createShaderProgram() && createSpriteShaderProgram() && createSkyShaderProgram() && createSunShaderProgram() &&
            createRoadShaderProgram() && createModelShaderProgram() && createCubeShaderProgram() && createCubeMesh() &&
            createQuadMesh() && loadCollectibleTextures() && loadGLTFModels() && createRetroShaderProgram() &&
-           createRetroBuffer();
+           createRetroBuffer() && createShadowResources();
 }
 
 bool Renderer::createShaderProgram() {
@@ -462,9 +552,13 @@ bool Renderer::createShaderProgram() {
 layout (location = 0) in vec3 aPosition;
 
 uniform mat4 uMvp;
+uniform mat4 uModel;
+uniform mat4 uLightViewProj;
+out vec4 vShadowPosition;
 uniform vec2 uSnap;
 
 void main() {
+    vShadowPosition = uLightViewProj * uModel * vec4(aPosition, 1.0);
     gl_Position = uMvp * vec4(aPosition, 1.0);
     if (uSnap.x > 0.0 && uSnap.y > 0.0) {
         vec2 snapped = floor(gl_Position.xy / gl_Position.w / uSnap + 0.5) * uSnap * gl_Position.w;
@@ -480,13 +574,20 @@ out vec4 FragColor;
 uniform vec3 uColor;
 uniform float uAlpha;
 
-void main() { FragColor = vec4(uColor, uAlpha); }
+uniform float uLight;
+uniform float uAmbientLight;
+uniform bool uReceivesShadow;
+
+void main() {
+    float light = uReceivesShadow ? shadowedLight(uLight, uAmbientLight) : uLight;
+    FragColor = vec4(uColor * light, uAlpha);
+}
 )";
 
     const unsigned int vertexShader = compileShader(GL_VERTEX_SHADER, vertexShaderSource, "Vertex");
     if(vertexShader == 0) { return false; }
 
-    const unsigned int fragmentShader = compileShader(GL_FRAGMENT_SHADER, fragmentShaderSource, "Fragment");
+    const unsigned int fragmentShader = compileShader(GL_FRAGMENT_SHADER, fragmentShaderSource, "Fragment", kShadowSampling);
     if(fragmentShader == 0) { glDeleteShader(vertexShader); return false; }
 
     shaderProgram_ = glCreateProgram();
@@ -509,13 +610,20 @@ void main() { FragColor = vec4(uColor, uAlpha); }
     mvpUniform_ = glGetUniformLocation(shaderProgram_, "uMvp");
     colorUniform_ = glGetUniformLocation(shaderProgram_, "uColor");
     alphaUniform_ = glGetUniformLocation(shaderProgram_, "uAlpha");
+    plainAmbientUniform_ = glGetUniformLocation(shaderProgram_, "uAmbientLight");
+    plainLightUniform_ = glGetUniformLocation(shaderProgram_, "uLight");
+    plainReceivesShadowUniform_ = glGetUniformLocation(shaderProgram_, "uReceivesShadow");
     plainSnapUniform_ = glGetUniformLocation(shaderProgram_, "uSnap");
-    if (mvpUniform_ < 0 || colorUniform_ < 0 || alphaUniform_ < 0) {
+    if (mvpUniform_ < 0 || colorUniform_ < 0 || alphaUniform_ < 0 || plainLightUniform_ < 0 ||
+        plainAmbientUniform_ < 0 || plainReceivesShadowUniform_ < 0) {
         std::cerr << "Shader program is missing required uniforms\n";
         glDeleteProgram(shaderProgram_); shaderProgram_ = 0; return false;
     }
 
-    return true;
+    plainLighting_ = {glGetUniformLocation(shaderProgram_, "uModel"),
+                        glGetUniformLocation(shaderProgram_, "uLightViewProj"),
+                        glGetUniformLocation(shaderProgram_, "uShadowMap")};
+    return plainLighting_.model >= 0 && plainLighting_.lightViewProj >= 0 && plainLighting_.shadowMap >= 0;
 }
 
 bool Renderer::createSpriteShaderProgram() {
@@ -774,6 +882,9 @@ layout (location = 0) in vec3 aPosition;
 layout (location = 1) in vec2 aTexCoord;
 
 uniform mat4 uMvp;
+uniform mat4 uModel;
+uniform mat4 uLightViewProj;
+out vec4 vShadowPosition;
 uniform vec2 uTexScale;
 uniform vec2 uTexOffset;
 uniform vec2 uSnap;
@@ -783,6 +894,7 @@ out vec2 vAffineTexCoord;
 out float vInvW;
 
 void main() {
+    vShadowPosition = uLightViewProj * uModel * vec4(aPosition, 1.0);
     gl_Position = uMvp * vec4(aPosition, 1.0);
     if (uSnap.x > 0.0 && uSnap.y > 0.0) {
         vec2 snapped = floor(gl_Position.xy / gl_Position.w / uSnap + 0.5) * uSnap * gl_Position.w;
@@ -805,6 +917,7 @@ out vec4 FragColor;
 uniform sampler2D uTexture;
 uniform float uLod;
 uniform float uLight;
+uniform float uAmbientLight;
 uniform float uAlpha;
 uniform float uTime;
 uniform float uHeat;
@@ -821,14 +934,14 @@ void main() {
                    sin(uTime * 1.7 + vTexCoord.y * 11.0) * 0.5) * (uHeat * 0.008);
         heatBoost = 0.04 * uHeat * sin(uTime * 4.2 + vTexCoord.y * 3.0);
     }
-    FragColor = vec4(textureLod(uTexture, tc, uLod).rgb * uLight * (1.0 + heatBoost), uAlpha);
+    FragColor = vec4(textureLod(uTexture, tc, uLod).rgb * shadowedLight(uLight, uAmbientLight) * (1.0 + heatBoost), uAlpha);
 }
 )";
 
     const unsigned int vertexShader = compileShader(GL_VERTEX_SHADER, vertexSource, "Road Vertex");
     if(vertexShader == 0) { return false; }
 
-    const unsigned int fragmentShader = compileShader(GL_FRAGMENT_SHADER, fragmentSource, "Road Fragment");
+    const unsigned int fragmentShader = compileShader(GL_FRAGMENT_SHADER, fragmentSource, "Road Fragment", kShadowSampling);
     if(fragmentShader == 0) { glDeleteShader(vertexShader); return false; }
 
     roadShaderProgram_ = glCreateProgram();
@@ -853,6 +966,7 @@ void main() {
     roadTexScaleUniform_ = glGetUniformLocation(roadShaderProgram_, "uTexScale");
     roadTexOffsetUniform_ = glGetUniformLocation(roadShaderProgram_, "uTexOffset");
     roadLodUniform_ = glGetUniformLocation(roadShaderProgram_, "uLod");
+    roadAmbientUniform_ = glGetUniformLocation(roadShaderProgram_, "uAmbientLight");
     roadLightUniform_ = glGetUniformLocation(roadShaderProgram_, "uLight");
     roadAlphaUniform_ = glGetUniformLocation(roadShaderProgram_, "uAlpha");
     roadTimeUniform_ = glGetUniformLocation(roadShaderProgram_, "uTime");
@@ -861,13 +975,16 @@ void main() {
     roadAffineUniform_ = glGetUniformLocation(roadShaderProgram_, "uAffine");
 
     if (roadMvpUniform_ < 0 || roadTextureUniform_ < 0 || roadTexScaleUniform_ < 0 ||
-        roadTexOffsetUniform_ < 0 || roadLodUniform_ < 0 || roadLightUniform_ < 0 ||
+        roadTexOffsetUniform_ < 0 || roadLodUniform_ < 0 || roadLightUniform_ < 0 || roadAmbientUniform_ < 0 ||
         roadAlphaUniform_ < 0 || roadTimeUniform_ < 0 || roadHeatUniform_ < 0) {
         std::cerr << "Road shader program is missing required uniforms\n";
         glDeleteProgram(roadShaderProgram_); roadShaderProgram_ = 0; return false;
     }
 
-    return true;
+    roadLighting_ = {glGetUniformLocation(roadShaderProgram_, "uModel"),
+                        glGetUniformLocation(roadShaderProgram_, "uLightViewProj"),
+                        glGetUniformLocation(roadShaderProgram_, "uShadowMap")};
+    return roadLighting_.model >= 0 && roadLighting_.lightViewProj >= 0 && roadLighting_.shadowMap >= 0;
 }
 
 bool Renderer::createModelShaderProgram() {
@@ -878,6 +995,9 @@ layout (location = 1) in vec3 aNormal;
 layout (location = 2) in vec2 aTexCoord;
 
 uniform mat4 uMvp;
+uniform mat4 uModel;
+uniform mat4 uLightViewProj;
+out vec4 vShadowPosition;
 uniform vec2 uSnap;
 
 out vec3 vNormal;
@@ -886,12 +1006,13 @@ out vec2 vAffineUv;
 out float vInvW;
 
 void main() {
+    vShadowPosition = uLightViewProj * uModel * vec4(aPosition, 1.0);
     gl_Position = uMvp * vec4(aPosition, 1.0);
     if (uSnap.x > 0.0 && uSnap.y > 0.0) {
         vec2 snapped = floor(gl_Position.xy / gl_Position.w / uSnap + 0.5) * uSnap * gl_Position.w;
         gl_Position.xy = snapped;
     }
-    vNormal = aNormal;
+    vNormal = transpose(inverse(mat3(uModel))) * aNormal;
     vUv = aTexCoord;
     vAffineUv = aTexCoord / gl_Position.w;
     vInvW = 1.0 / gl_Position.w;
@@ -919,9 +1040,11 @@ void main() {
     if (uAffine > 0.001) {
         uv = mix(vUv, vAffineUv * (1.0 / vInvW), uAffine);
     }
-    vec3 baseColor = uHasTexture > 0.5 ? texture(uTexture, uv).rgb : uBaseColor;
-    float diffuse = max(dot(normalize(vNormal), normalize(uSunDir)), 0.0);
-    float light = uAmbient + (1.0 - uAmbient) * diffuse;
+    vec3 baseColor = uBaseColor * (uHasTexture > 0.5 ? texture(uTexture, uv).rgb : vec3(1.0));
+    vec3 normal = normalize(vNormal);
+    float diffuse = max(dot(normal, normalize(uSunDir)), 0.0);
+    float ambient = uAmbient * (0.95 + 0.30 * normal.y);
+    float light = ambient + (1.0 - ambient) * diffuse * sunVisibility(diffuse);
     FragColor = vec4(baseColor * light, 1.0);
 }
 )";
@@ -929,7 +1052,7 @@ void main() {
     const unsigned int vertexShader = compileShader(GL_VERTEX_SHADER, vertexSource, "Model Vertex");
     if(vertexShader == 0) { return false; }
 
-    const unsigned int fragmentShader = compileShader(GL_FRAGMENT_SHADER, fragmentSource, "Model Fragment");
+    const unsigned int fragmentShader = compileShader(GL_FRAGMENT_SHADER, fragmentSource, "Model Fragment", kShadowSampling);
     if(fragmentShader == 0) { glDeleteShader(vertexShader); return false; }
 
     modelShaderProgram_ = glCreateProgram();
@@ -963,7 +1086,10 @@ void main() {
         glDeleteProgram(modelShaderProgram_); modelShaderProgram_ = 0; return false;
     }
 
-    return true;
+    modelLighting_ = {glGetUniformLocation(modelShaderProgram_, "uModel"),
+                        glGetUniformLocation(modelShaderProgram_, "uLightViewProj"),
+                        glGetUniformLocation(modelShaderProgram_, "uShadowMap")};
+    return modelLighting_.model >= 0 && modelLighting_.lightViewProj >= 0 && modelLighting_.shadowMap >= 0;
 }
 
 bool Renderer::createCubeShaderProgram() {
@@ -973,17 +1099,21 @@ layout (location = 0) in vec3 aPosition;
 layout (location = 1) in vec3 aNormal;
 
 uniform mat4 uMvp;
+uniform mat4 uModel;
+uniform mat4 uLightViewProj;
+out vec4 vShadowPosition;
 uniform vec2 uSnap;
 
 out vec3 vNormal;
 
 void main() {
+    vShadowPosition = uLightViewProj * uModel * vec4(aPosition, 1.0);
     gl_Position = uMvp * vec4(aPosition, 1.0);
     if (uSnap.x > 0.0 && uSnap.y > 0.0) {
         vec2 snapped = floor(gl_Position.xy / gl_Position.w / uSnap + 0.5) * uSnap * gl_Position.w;
         gl_Position.xy = snapped;
     }
-    vNormal = aNormal;
+    vNormal = transpose(inverse(mat3(uModel))) * aNormal;
 }
 )";
 
@@ -998,8 +1128,10 @@ uniform vec3 uSunDir;
 uniform float uAmbient;
 
 void main() {
-    float diffuse = max(dot(normalize(vNormal), normalize(uSunDir)), 0.0);
-    float light = uAmbient + (1.0 - uAmbient) * diffuse;
+    vec3 normal = normalize(vNormal);
+    float diffuse = max(dot(normal, normalize(uSunDir)), 0.0);
+    float ambient = uAmbient * (0.95 + 0.30 * normal.y);
+    float light = ambient + (1.0 - ambient) * diffuse * sunVisibility(diffuse);
     FragColor = vec4(uColor * light, 1.0);
 }
 )";
@@ -1007,7 +1139,7 @@ void main() {
     const unsigned int vertexShader = compileShader(GL_VERTEX_SHADER, vertexSource, "Cube Vertex");
     if(vertexShader == 0) { return false; }
 
-    const unsigned int fragmentShader = compileShader(GL_FRAGMENT_SHADER, fragmentSource, "Cube Fragment");
+    const unsigned int fragmentShader = compileShader(GL_FRAGMENT_SHADER, fragmentSource, "Cube Fragment", kShadowSampling);
     if(fragmentShader == 0) { glDeleteShader(vertexShader); return false; }
 
     cubeShaderProgram_ = glCreateProgram();
@@ -1038,7 +1170,10 @@ void main() {
         glDeleteProgram(cubeShaderProgram_); cubeShaderProgram_ = 0; return false;
     }
 
-    return true;
+    cubeLighting_ = {glGetUniformLocation(cubeShaderProgram_, "uModel"),
+                        glGetUniformLocation(cubeShaderProgram_, "uLightViewProj"),
+                        glGetUniformLocation(cubeShaderProgram_, "uShadowMap")};
+    return cubeLighting_.model >= 0 && cubeLighting_.lightViewProj >= 0 && cubeLighting_.shadowMap >= 0;
 }
 
 bool Renderer::createRetroShaderProgram() {
@@ -1153,6 +1288,84 @@ bool Renderer::createRetroBuffer() {
         return false;
     }
 
+    return true;
+}
+
+bool Renderer::createShadowResources() {
+    constexpr const char* vertexSource = R"(
+#version 330 core
+layout (location = 0) in vec3 aPosition;
+layout (location = 1) in vec2 aTexCoord;
+uniform mat4 uMvp;
+out vec2 vUv;
+void main() {
+    gl_Position = uMvp * vec4(aPosition, 1.0);
+    vUv = aTexCoord;
+}
+)";
+    constexpr const char* fragmentSource = R"(
+#version 330 core
+in vec2 vUv;
+uniform sampler2D uTexture;
+uniform bool uTextured;
+uniform float uOpacity;
+void main() {
+    if (uTextured && texture(uTexture, vUv).a < 0.1) { discard; }
+    // Fade distant building shadows without writing a solid invisible occluder.
+    const int bayer[16] = int[16](0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5);
+    ivec2 pixel = ivec2(gl_FragCoord.xy) % 4;
+    if (uOpacity < (float(bayer[pixel.y * 4 + pixel.x]) + 0.5) / 16.0) { discard; }
+}
+)";
+    const unsigned int vertex = compileShader(GL_VERTEX_SHADER, vertexSource, "Shadow Vertex");
+    if (vertex == 0) { return false; }
+    const unsigned int fragment = compileShader(GL_FRAGMENT_SHADER, fragmentSource, "Shadow Fragment");
+    if (fragment == 0) { glDeleteShader(vertex); return false; }
+    shadowShaderProgram_ = glCreateProgram();
+    glAttachShader(shadowShaderProgram_, vertex);
+    glAttachShader(shadowShaderProgram_, fragment);
+    glLinkProgram(shadowShaderProgram_);
+    glDeleteShader(vertex);
+    glDeleteShader(fragment);
+    int success = 0;
+    glGetProgramiv(shadowShaderProgram_, GL_LINK_STATUS, &success);
+    if (success == 0) {
+        std::array<char, 1024> log{};
+        glGetProgramInfoLog(shadowShaderProgram_, static_cast<int>(log.size()), nullptr, log.data());
+        std::cerr << "Shadow shader linking failed: " << log.data() << '\n';
+        return false;
+    }
+    shadowMvpUniform_ = glGetUniformLocation(shadowShaderProgram_, "uMvp");
+    shadowTextureUniform_ = glGetUniformLocation(shadowShaderProgram_, "uTexture");
+    shadowTexturedUniform_ = glGetUniformLocation(shadowShaderProgram_, "uTextured");
+    shadowOpacityUniform_ = glGetUniformLocation(shadowShaderProgram_, "uOpacity");
+    if (shadowMvpUniform_ < 0 || shadowTextureUniform_ < 0 || shadowTexturedUniform_ < 0 ||
+        shadowOpacityUniform_ < 0) { return false; }
+
+    glGenFramebuffers(1, &shadowFbo_);
+    glGenTextures(1, &shadowDepthTexture_);
+    if (shadowFbo_ == 0 || shadowDepthTexture_ == 0) { return false; }
+    glBindTexture(GL_TEXTURE_2D, shadowDepthTexture_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, kShadowMapSize, kShadowMapSize,
+                 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+    constexpr float border[] = {1.0f, 1.0f, 1.0f, 1.0f};
+    glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, border);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, shadowFbo_);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, shadowDepthTexture_, 0);
+    glDrawBuffer(GL_NONE);
+    glReadBuffer(GL_NONE);
+    const bool complete = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    if (!complete) { std::cerr << "Shadow framebuffer is incomplete\n"; return false; }
+    lightViewProj_ = sunViewProjection().values;
     return true;
 }
 
@@ -1334,38 +1547,32 @@ void Renderer::drawWorld(float playerX, float roadScroll, float gameTime, const 
 
     const float aspectRatio = (retroMode_ ? static_cast<float>(kRetroWidth) : static_cast<float>(std::max(1, drawableWidth_))) /
                               (retroMode_ ? static_cast<float>(kRetroHeight) : static_cast<float>(std::max(1, drawableHeight_)));
-    const Mat4 projection = perspective(radians(60.0f), aspectRatio, 0.1f, 200.0f);
-    const Mat4 view = lookAt({0.0f, 5.0f, 9.0f}, {0.0f, 0.5f, -18.0f}, {0.0f, 1.0f, 0.0f});
-
-    Mat4 renderedView = view;
-    if (retroMode_) {
-        const float t = gameTime;
-        const float jx = std::sin(t * 7.3f) * 0.004f;
-        const float jy = std::sin(t * 5.1f + 1.3f) * 0.003f;
-        const float jz = std::sin(t * 6.7f + 2.2f) * 0.004f;
-        renderedView = multiply(translation({jx, jy, jz}), view);
-    }
-    const Mat4 viewProj = multiply(projection, renderedView);
+    const Mat4 projection = perspective(radians(kCameraVerticalFov), aspectRatio, 0.1f, 200.0f);
+    const Mat4 view = lookAt({0.0f, kCameraHeight, kCameraZ},
+                             {0.0f, kCameraTargetHeight, kCameraTargetZ}, {0.0f, 1.0f, 0.0f});
+    const Mat4 viewProj = multiply(projection, view);
 
     const float scrollOffset = std::fmod(roadScroll, kLaneSegmentLength);
 
-    glDepthMask(GL_FALSE);
-    glUseProgram(skyShaderProgram_);
-    glBindVertexArray(quadVao_);
-    {
-        const Mat4 skyScale = scale({2.0f, 2.0f, 1.0f});
-        applyRetroSnap(skySnapUniform_);
-        glUniformMatrix4fv(skyMvpUniform_, 1, GL_FALSE, skyScale.values.data());
-        glUniform3f(skyTopColorUniform_, 0.30f, 0.60f, 0.93f);
-        glUniform3f(skyBottomColorUniform_, 0.74f, 0.86f, 0.97f);
-        glDrawArrays(GL_TRIANGLES, 0, 6);
+    if (!shadowPass_) {
+        glDepthMask(GL_FALSE);
+        glUseProgram(skyShaderProgram_);
+        glBindVertexArray(quadVao_);
+        {
+            const Mat4 skyScale = scale({2.0f, 2.0f, 1.0f});
+            applyRetroSnap(skySnapUniform_);
+            glUniformMatrix4fv(skyMvpUniform_, 1, GL_FALSE, skyScale.values.data());
+            glUniform3f(skyTopColorUniform_, 0.30f, 0.60f, 0.93f);
+            glUniform3f(skyBottomColorUniform_, 0.74f, 0.86f, 0.97f);
+            glDrawArrays(GL_TRIANGLES, 0, 6);
+        }
+
+        glUseProgram(shaderProgram_);
+        glBindVertexArray(quadVao_);
+        drawSun(viewProj.values);
+
+        glDepthMask(GL_TRUE);
     }
-
-    glUseProgram(shaderProgram_);
-    glBindVertexArray(quadVao_);
-    drawSun(viewProj.values);
-
-    glDepthMask(GL_TRUE);
 
     constexpr Color groundColor = {0.36f, 0.35f, 0.33f};
     constexpr float groundY = -0.06f;
@@ -1393,16 +1600,10 @@ void Renderer::drawWorld(float playerX, float roadScroll, float gameTime, const 
                                 {centerX + worldLateralOffset(centerZ), groundY - worldCurvatureDrop(centerZ),
                                  centerZ, groundDepth, kLaneSegmentLength / static_cast<float>(kGroundSubdivisions),
                                  1.0f},
-                                static_cast<int>(Face::Top), groundLight);
+                                static_cast<int>(Face::Top), groundLight, 1.0f, true, true);
             }
         }
     }
-
-    glUseProgram(roadShaderProgram_);
-    glBindVertexArray(quadVao_);
-
-    applyRetroSnap(roadSnapUniform_);
-    applyRetroAffine(roadAffineUniform_, kRoadAffineStrength);
 
     constexpr float roadY = -0.04f;
     constexpr int kRoadSubdivisions = 6;
@@ -1410,40 +1611,52 @@ void Renderer::drawWorld(float playerX, float roadScroll, float gameTime, const 
     const Mat4 rs = multiply(rotateX(kPi * 0.5f), scale({roadWidth, subLength, 1.0f}));
     const float roadLight = faceLightForNormal({0.0f, 1.0f, 0.0f});
 
-    for (int segment = 0; segment < kLaneSegmentCount; ++segment) {
-        const float segmentZ = kLaneStartZ + scrollOffset + static_cast<float>(segment) * kLaneSegmentLength;
+    if (!shadowPass_) {
+        glUseProgram(roadShaderProgram_);
+        glBindVertexArray(quadVao_);
 
-        for (int sub = 0; sub < kRoadSubdivisions; ++sub) {
-            const float centerZ = segmentZ + (static_cast<float>(sub) + 0.5f) * subLength;
-            const float centerY = roadY - worldCurvatureDrop(centerZ);
-            const Mat4 model = multiply(translation({worldLateralOffset(centerZ), centerY, centerZ}), rs);
-            const Mat4 mvp = multiply(viewProj, model);
+        applyRetroSnap(roadSnapUniform_);
+        applyRetroAffine(roadAffineUniform_, kRoadAffineStrength);
 
-            const float lod = computeMipLevel(worldLateralOffset(centerZ), centerY, centerZ,
-                                              roadWidth, subLength, 256.0f, 256.0f / kRoadSubdivisions);
+        for (int segment = 0; segment < kLaneSegmentCount; ++segment) {
+            const float segmentZ = kLaneStartZ + scrollOffset + static_cast<float>(segment) * kLaneSegmentLength;
 
-            glUniformMatrix4fv(roadMvpUniform_, 1, GL_FALSE, mvp.values.data());
-            glUniform1i(roadTextureUniform_, 0);
-            glUniform2f(roadTexScaleUniform_, 1.0f, 1.0f / static_cast<float>(kRoadSubdivisions));
-            glUniform2f(roadTexOffsetUniform_, 0.0f,
-                        static_cast<float>(segment) + static_cast<float>(sub) / static_cast<float>(kRoadSubdivisions));
-            glUniform1f(roadLodUniform_, lod);
-            glUniform1f(roadLightUniform_, roadLight);
-            glUniform1f(roadAlphaUniform_, 1.0f);
-            glUniform1f(roadTimeUniform_, gameTime);
+            for (int sub = 0; sub < kRoadSubdivisions; ++sub) {
+                const float centerZ = segmentZ + (static_cast<float>(sub) + 0.5f) * subLength;
+                const float centerY = roadY - worldCurvatureDrop(centerZ);
+                Mat4 model = multiply(translation({worldLateralOffset(centerZ), centerY, centerZ}), rs);
+                bendGroundSegment(model, centerZ, subLength, 1);
+                const Mat4 mvp = multiply(viewProj, model);
 
-            const float heatDistance = 9.0f - centerZ;
-            const float heat = std::max(0.0f, std::min(1.0f, (heatDistance - 40.0f) / 50.0f));
-            glUniform1f(roadHeatUniform_, heat);
+                const float lod = computeMipLevel(worldLateralOffset(centerZ), centerY, centerZ,
+                                                  roadWidth, subLength, 256.0f, 256.0f / kRoadSubdivisions);
 
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, roadTexture_.id);
-            glDrawArrays(GL_TRIANGLES, 0, 6);
+                applyLighting(roadLighting_, model.values);
+                glUniformMatrix4fv(roadMvpUniform_, 1, GL_FALSE, mvp.values.data());
+                glUniform1i(roadTextureUniform_, 0);
+                glUniform2f(roadTexScaleUniform_, 1.0f, 1.0f / static_cast<float>(kRoadSubdivisions));
+                glUniform2f(roadTexOffsetUniform_, 0.0f,
+                            static_cast<float>(segment) + static_cast<float>(sub) / static_cast<float>(kRoadSubdivisions));
+                glUniform1f(roadLodUniform_, lod);
+                const Vec3 normal = groundNormal(centerZ, subLength);
+                glUniform1f(roadLightUniform_, faceLightForNormal(normal));
+                glUniform1f(roadAmbientUniform_, ambientForNormal(normal));
+                glUniform1f(roadAlphaUniform_, 1.0f);
+                glUniform1f(roadTimeUniform_, gameTime);
+
+                const float heatDistance = 9.0f - centerZ;
+                const float heat = std::max(0.0f, std::min(1.0f, (heatDistance - 40.0f) / 50.0f));
+                glUniform1f(roadHeatUniform_, heat);
+
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D, roadTexture_.id);
+                glDrawArrays(GL_TRIANGLES, 0, 6);
+            }
         }
-    }
 
-    glBindTexture(GL_TEXTURE_2D, 0);
-    glBindVertexArray(quadVao_);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glBindVertexArray(quadVao_);
+    }
 
     constexpr int kBuildingsPerSide = 4;
     constexpr float buildingSides[] = {-1.0f, 1.0f};
@@ -1573,7 +1786,7 @@ void Renderer::drawWorld(float playerX, float roadScroll, float gameTime, const 
                 drawColoredQuad(viewProj.values, sidewalkColor,
                                 {centerX, sidewalkTopY - worldCurvatureDrop(centerZ), centerZ,
                                  sidewalkWidth, subLength, 1.0f},
-                                static_cast<int>(Face::Top), roadLight);
+                                static_cast<int>(Face::Top), roadLight, 1.0f, true, true);
             }
         }
     }
@@ -1592,42 +1805,13 @@ void Renderer::drawWorld(float playerX, float roadScroll, float gameTime, const 
                     drawCube(viewProj.values,
                              {curbX, curbY, centerZ,
                               kCurbThickness, curbHeight, subLength},
-                             curbColor);
+                             curbColor, true);
                 }
             }
         }
     }
     glUseProgram(shaderProgram_);
     glBindVertexArray(quadVao_);
-
-    glDepthMask(GL_FALSE);
-
-    for (const Building& building : buildings) {
-        if (building.fade <= 0.0f) { continue; }
-        drawSunShadow(viewProj.values, building.x, building.z,
-                      building.h, building.w, building.d, -0.02f, 0.30f * building.fade);
-    }
-
-    drawSunShadow(viewProj.values, playerX + worldLateralOffset(kPlayerZ), kPlayerZ,
-                  kPlayerScale, kPlayerScale * 0.9f, kPlayerScale * 0.9f, -0.035f, 0.30f);
-
-    for(const Entity& entity : entities){
-        if(entity.type == EntityType::Obstacle) {
-            const bool isCone = (entity.textureIndex % 2 == 0);
-            if (isCone) {
-                drawSunShadow(viewProj.values, laneToX(entity.lane) + worldLateralOffset(entity.z), entity.z,
-                              0.85f, 0.9f, 0.9f, -0.035f, 0.30f);
-            } else {
-                drawSunShadow(viewProj.values, laneToX(entity.lane) + worldLateralOffset(entity.z), entity.z,
-                              0.8f, 2.6f, 0.7f, -0.035f, 0.30f);
-            }
-        } else {
-            drawSunShadow(viewProj.values, laneToX(entity.lane) + worldLateralOffset(entity.z), entity.z,
-                          0.8f, 1.0f, 1.0f, -0.035f, 0.26f);
-        }
-    }
-
-    glDepthMask(GL_TRUE);
 
     glBindVertexArray(cubeVao_);
     glUseProgram(cubeShaderProgram_);
@@ -1715,8 +1899,11 @@ void Renderer::drawWorld(float playerX, float roadScroll, float gameTime, const 
 
     glUseProgram(shaderProgram_);
     glBindVertexArray(quadVao_);
-    for (const CollectEffect& effect : collectEffects) {
-        drawCollectEffect(viewProj.values, effect, gameTime);
+    if (!shadowPass_) {
+        glDepthMask(GL_FALSE);
+        for (const CollectEffect& effect : collectEffects) {
+            drawCollectEffect(viewProj.values, effect, gameTime);
+        }
     }
 
     glBindTexture(GL_TEXTURE_2D, 0);
@@ -1726,15 +1913,25 @@ void Renderer::drawWorld(float playerX, float roadScroll, float gameTime, const 
     glBindVertexArray(cubeVao_);
 }
 
-void Renderer::drawCube(const std::array<float, 16>& viewProj, const Transform& transform, const Color& color) const {
-    const Mat4 model = multiply(
+void Renderer::drawCube(const std::array<float, 16>& viewProj, const Transform& transform, const Color& color,
+                         bool followsGround) const {
+    Mat4 model = multiply(
         translation({transform.x, transform.y, transform.z}),
         scale({transform.scaleX, transform.scaleY, transform.scaleZ})
     );
+    if (followsGround) { bendGroundSegment(model, transform.z, transform.scaleZ, 2); }
     Mat4 vp;
     vp.values = viewProj;
     const Mat4 mvp = multiply(vp, model);
 
+    glBindVertexArray(cubeVao_);
+    if (shadowPass_) {
+        prepareShadowDraw(model.values);
+        glDrawArrays(GL_TRIANGLES, 0, 36);
+        return;
+    }
+    glUseProgram(cubeShaderProgram_);
+    applyLighting(cubeLighting_, model.values);
     applyRetroSnap(cubeSnapUniform_);
     glUniformMatrix4fv(cubeMvpUniform_, 1, GL_FALSE, mvp.values.data());
     glUniform3f(cubeColorUniform_, color.r, color.g, color.b);
@@ -1753,6 +1950,17 @@ void Renderer::drawGLTFModel(const std::array<float, 16>& viewProj, const GLTFMo
     vp.values = viewProj;
     const Mat4 mvp = multiply(vp, modelMatrix);
 
+    if (shadowPass_) {
+        prepareShadowDraw(modelMatrix.values);
+        for (const GLTFModel::Primitive& primitive : model.primitives()) {
+            glBindVertexArray(primitive.vao);
+            glDrawElements(GL_TRIANGLES, primitive.indexCount, GL_UNSIGNED_INT, nullptr);
+        }
+        glBindVertexArray(0);
+        return;
+    }
+    glUseProgram(modelShaderProgram_);
+    applyLighting(modelLighting_, modelMatrix.values);
     applyRetroSnap(modelSnapUniform_);
     applyRetroAffine(modelAffineUniform_, kRetroAffineStrength);
     glUniformMatrix4fv(modelMvpUniform_, 1, GL_FALSE, mvp.values.data());
@@ -1791,6 +1999,14 @@ void Renderer::drawTexturedQuad(const std::array<float, 16>& viewProj, unsigned 
     vp.values = viewProj;
     const Mat4 mvp = multiply(vp, model);
 
+    glBindVertexArray(quadVao_);
+    if (shadowPass_) {
+        prepareShadowDraw(model.values, 0, alpha);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+        return;
+    }
+    glUseProgram(roadShaderProgram_);
+    applyLighting(roadLighting_, model.values);
     const SpriteTexture* tex = findSpriteTexture(texture);
     const float texelU = static_cast<float>(tex->width) * texScaleU;
     const float texelV = static_cast<float>(tex->height) * texScaleV;
@@ -1805,6 +2021,8 @@ void Renderer::drawTexturedQuad(const std::array<float, 16>& viewProj, unsigned 
     glUniform2f(roadTexOffsetUniform_, 0.0f, 0.0f);
     glUniform1f(roadLodUniform_, lod);
     glUniform1f(roadLightUniform_, lightFactor);
+    glUniform1f(roadAmbientUniform_, ambientForNormal(face == static_cast<int>(Face::Top)
+                                                    ? Vec3{0.0f, 1.0f, 0.0f} : Vec3{0.0f, 0.0f, 1.0f}));
     glUniform1f(roadAlphaUniform_, alpha);
     glUniform1f(roadTimeUniform_, 0.0f);
     glUniform1f(roadHeatUniform_, 0.0f);
@@ -1816,14 +2034,14 @@ void Renderer::drawTexturedQuad(const std::array<float, 16>& viewProj, unsigned 
 
 float Renderer::computeMipLevel(float centerX, float centerY, float centerZ,
                                float worldU, float worldV, float texelU, float texelV) const {
-    const float dX = centerX - 0.0f;
-    const float dY = centerY - 5.0f;
-    const float dZ = centerZ - 9.0f;
+    const float dX = centerX;
+    const float dY = centerY - kCameraHeight;
+    const float dZ = centerZ - kCameraZ;
     const float distance = std::sqrt(dX * dX + dY * dY + dZ * dZ);
 
-    const float viewHalfHeight = distance * 0.5773503f;
+    const float viewHalfHeight = std::max(distance, 0.1f) * std::tan(radians(kCameraVerticalFov) * 0.5f);
     const float worldPerTexel = std::max(worldU / texelU, worldV / texelV);
-    const float pixelsPerTexel = worldPerTexel * static_cast<float>(drawableHeight_) /
+    const float pixelsPerTexel = worldPerTexel * static_cast<float>(retroMode_ ? kRetroHeight : std::max(1, drawableHeight_)) /
                                  (viewHalfHeight * 2.0f);
 
     const float lod = std::ceil(std::log2(1.0f / pixelsPerTexel));
@@ -1843,92 +2061,48 @@ const Renderer::SpriteTexture* Renderer::findSpriteTexture(unsigned int id) cons
 }
 
 void Renderer::drawColoredQuad(const std::array<float, 16>& viewProj, const Color& color, const Transform& transform,
-                               int face, float lightFactor, float alpha) const {
+                               int face, float lightFactor, float alpha, bool receivesShadow, bool followsGround) const {
     Mat4 rotation = identity();
     if (face == static_cast<int>(Face::Side)) { rotation = rotateY(kPi * 0.5f); }
     else if (face == static_cast<int>(Face::Top)) { rotation = rotateX(kPi * 0.5f); }
 
-    const Mat4 model = multiply(
+    Mat4 model = multiply(
         translation({transform.x, transform.y, transform.z}),
         multiply(rotation, scale({transform.scaleX, transform.scaleY, transform.scaleZ}))
     );
+    const Vec3 normal = followsGround ? groundNormal(transform.z, transform.scaleY)
+                                      : (face == static_cast<int>(Face::Top) ? Vec3{0.0f, 1.0f, 0.0f}
+                                                                            : Vec3{0.0f, 0.0f, 1.0f});
+    if (followsGround) {
+        bendGroundSegment(model, transform.z, transform.scaleY, 1);
+        lightFactor = faceLightForNormal(normal);
+    }
     Mat4 vp;
     vp.values = viewProj;
     const Mat4 mvp = multiply(vp, model);
 
+    glBindVertexArray(quadVao_);
+    if (shadowPass_) {
+        prepareShadowDraw(model.values, 0, alpha);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+        return;
+    }
+    glUseProgram(shaderProgram_);
+    applyLighting(plainLighting_, model.values);
     applyRetroSnap(plainSnapUniform_);
     glUniformMatrix4fv(mvpUniform_, 1, GL_FALSE, mvp.values.data());
-    glUniform3f(colorUniform_, color.r * lightFactor, color.g * lightFactor, color.b * lightFactor);
+    glUniform3f(colorUniform_, color.r, color.g, color.b);
+    glUniform1f(plainLightUniform_, lightFactor);
+    glUniform1f(plainAmbientUniform_, ambientForNormal(normal));
+    glUniform1i(plainReceivesShadowUniform_, receivesShadow);
     glUniform1f(alphaUniform_, alpha);
     glDrawArrays(GL_TRIANGLES, 0, 6);
 }
 
-void Renderer::drawSunShadow(const std::array<float, 16>& viewProj, float centerX, float centerZ,
-                             float height, float width, float depth, float y, float alpha) const {
-    const Vec3 lightDir = {-kSunDir.x, -kSunDir.y, kSunDir.z};
-    const float horiz = std::sqrt(lightDir.x * lightDir.x + lightDir.z * lightDir.z);
-    if (horiz < 1e-4f) { return; }
-    const float lx = lightDir.x / horiz;
-    const float lz = lightDir.z / horiz;
-    const float perpX = -lz;
-    const float perpZ = lx;
-    const float len = height * std::abs(horiz / lightDir.y);
-
-    const float wAlong = (std::abs(width * lx) + std::abs(depth * lz)) * 0.5f;
-    const float wPerp = (std::abs(width * perpX) + std::abs(depth * perpZ)) * 0.5f;
-    const float fullLen = 2.0f * wAlong + len;
-
-    constexpr float kShadowMaxZ = kPlayerZ + 4.0f;
-    float shadowLen = fullLen;
-    if (lz > 0.0f) {
-        const float sFar = (kShadowMaxZ - centerZ) / lz;
-        shadowLen = std::min(shadowLen, sFar + wAlong);
-    }
-    if (shadowLen <= 0.0f) { return; }
-
-    constexpr Color shadowColor = {0.02f, 0.02f, 0.03f};
-    const float shadowWidth = 2.0f * wPerp;
-    const float latBase = worldLateralOffset(centerZ);
-
-    constexpr int kShadowSegments = 10;
-    Mat4 vp;
-    vp.values = viewProj;
-
-    for (int i = 0; i < kShadowSegments; ++i) {
-        const float s0 = -wAlong + shadowLen * (static_cast<float>(i) / kShadowSegments);
-        const float s1 = -wAlong + shadowLen * (static_cast<float>(i + 1) / kShadowSegments);
-        const float segMid = (s0 + s1) * 0.5f;
-        const float segLen = s1 - s0;
-
-        const float px = centerX + lx * segMid + (worldLateralOffset(centerZ + lz * segMid) - latBase);
-        const float pz = centerZ + lz * segMid;
-        const float drop = worldCurvatureDrop(pz);
-
-        Mat4 model{};
-        model.values[0] = lx * segLen;
-        model.values[2] = lz * segLen;
-        model.values[4] = perpX * shadowWidth;
-        model.values[6] = perpZ * shadowWidth;
-        model.values[8] = 0.0f;
-        model.values[9] = 1.0f;
-        model.values[10] = 0.0f;
-        model.values[12] = px;
-        model.values[13] = y - drop;
-        model.values[14] = pz;
-        model.values[15] = 1.0f;
-
-        const Mat4 mvp = multiply(vp, model);
-
-        applyRetroSnap(plainSnapUniform_);
-        glUniformMatrix4fv(mvpUniform_, 1, GL_FALSE, mvp.values.data());
-        glUniform3f(colorUniform_, shadowColor.r, shadowColor.g, shadowColor.b);
-        glUniform1f(alphaUniform_, alpha);
-        glDrawArrays(GL_TRIANGLES, 0, 6);
-    }
-}
-
 void Renderer::drawSun(const std::array<float, 16>& viewProj) const {
-    constexpr float sunX = -8.0f, sunY = 17.0f, sunZ = -36.0f;
+    const float sunX = kSunDir.x * 100.0f;
+    const float sunY = kCameraHeight + kSunDir.y * 100.0f;
+    const float sunZ = kCameraZ + kSunDir.z * 100.0f;
     constexpr Color sunColor = {1.0f, 1.0f, 1.0f};
 
     glBlendFunc(GL_SRC_ALPHA, GL_ONE);
@@ -1990,7 +2164,7 @@ void Renderer::drawCollectEffect(const std::array<float, 16>& viewProj, const Co
         const float shardSize = std::max(0.05f, 0.24f - t * 0.13f);
         drawColoredQuad(viewProj, bright,
                         {shardX, -0.02f + t * 0.4f - drop, shardZ, shardSize, shardSize, 1.0f},
-                        static_cast<int>(Face::Top), 1.0f, life * 0.95f);
+                        static_cast<int>(Face::Top), 1.0f, life * 0.95f, false);
     }
 
     constexpr float kSparks = 14.0f;
@@ -2003,7 +2177,7 @@ void Renderer::drawCollectEffect(const std::array<float, 16>& viewProj, const Co
         const float sparkSize = std::max(0.04f, 0.11f - t * 0.06f);
         drawColoredQuad(viewProj, white,
                         {sparkX, -0.01f + t * 0.6f - drop, sparkZ, sparkSize, sparkSize, 1.0f},
-                        static_cast<int>(Face::Top), 1.0f, life * 0.8f);
+                        static_cast<int>(Face::Top), 1.0f, life * 0.8f, false);
     }
 
     constexpr float kRingRays = 16.0f;
@@ -2014,7 +2188,7 @@ void Renderer::drawCollectEffect(const std::array<float, 16>& viewProj, const Co
         const float raySize = std::max(0.05f, 0.30f * (1.0f - t * 0.5f));
         drawColoredQuad(viewProj, bright,
                         {rayX, 0.35f - drop, rayZ, raySize, raySize, 1.0f},
-                        static_cast<int>(Face::FrontBack), 1.0f, life * 0.6f);
+                        static_cast<int>(Face::FrontBack), 1.0f, life * 0.6f, false);
     }
 
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -2041,6 +2215,11 @@ void Renderer::drawSprite(const std::array<float, 16>& viewProj, unsigned int te
     vp.values = viewProj;
     const Mat4 mvp = multiply(vp, model);
 
+    if (shadowPass_) {
+        prepareShadowDraw(model.values, texture);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+        return;
+    }
     applyRetroSnap(spriteSnapUniform_);
     glUniformMatrix4fv(spriteMvpUniform_, 1, GL_FALSE, mvp.values.data());
     glUniform1f(spriteTimeUniform_, gameTime);
@@ -2061,12 +2240,35 @@ void Renderer::applyRetroSnap(int snapUniform) const {
     glUniform2f(snapUniform, dx, dy);
 }
 
+void Renderer::applyLighting(const LightingUniforms& uniforms, const std::array<float, 16>& model) const {
+    glUniformMatrix4fv(uniforms.model, 1, GL_FALSE, model.data());
+    glUniformMatrix4fv(uniforms.lightViewProj, 1, GL_FALSE, lightViewProj_.data());
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, shadowDepthTexture_);
+    glUniform1i(uniforms.shadowMap, 1);
+    glActiveTexture(GL_TEXTURE0);
+}
+
+void Renderer::prepareShadowDraw(const std::array<float, 16>& model, unsigned int texture, float opacity) const {
+    const Mat4 mvp = multiply(Mat4{lightViewProj_}, Mat4{model});
+    glUseProgram(shadowShaderProgram_);
+    glUniformMatrix4fv(shadowMvpUniform_, 1, GL_FALSE, mvp.values.data());
+    glUniform1i(shadowTexturedUniform_, texture != 0);
+    glUniform1f(shadowOpacityUniform_, opacity);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glUniform1i(shadowTextureUniform_, 0);
+}
+
 void Renderer::applyRetroAffine(int affineUniform, float strength) const {
     if (affineUniform < 0) { return; }
     glUniform1f(affineUniform, retroMode_ ? strength : 0.0f);
 }
 
 void Renderer::shutdownGraphics(){
+    if(shadowShaderProgram_!=0){ glDeleteProgram(shadowShaderProgram_); shadowShaderProgram_ = 0; }
+    if(shadowDepthTexture_!=0){ glDeleteTextures(1, &shadowDepthTexture_); shadowDepthTexture_ = 0; }
+    if(shadowFbo_!=0){ glDeleteFramebuffers(1, &shadowFbo_); shadowFbo_ = 0; }
     if(retroShaderProgram_!=0){ glDeleteProgram(retroShaderProgram_); retroShaderProgram_ = 0; }
     if(retroDepthRbo_!=0){ glDeleteRenderbuffers(1, &retroDepthRbo_); retroDepthRbo_ = 0; }
     if(retroColorTexture_!=0){ glDeleteTextures(1, &retroColorTexture_); retroColorTexture_ = 0; }

@@ -29,6 +29,12 @@ namespace GameConfig {
     constexpr bool kTriPointFiltering = true;
     constexpr float kWorldCurvature = 0.0008f;
     constexpr float kRoadSway = 0.7f;
+
+    constexpr float kCameraHeight = 6.8f;
+    constexpr float kCameraZ = 11.0f;
+    constexpr float kCameraTargetHeight = 0.5f;
+    constexpr float kCameraTargetZ = -14.0f;
+    constexpr float kCameraVerticalFov = 60.0f;
 }
 
 #endif //SUBWAY_GAMECONFIG_H
