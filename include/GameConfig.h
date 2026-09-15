@@ -17,6 +17,20 @@ constexpr float kMinSpeed = 4.0f;
 constexpr float kMaxSpeed = 18.0f;
 constexpr int kMaxHealth = 3;
 
+// Collectible animation and item extrusion, shared by all rendering modes.
+constexpr float kCollectibleSpinPeriod = 5.0f; // Seconds per full turn, at constant angular speed.
+constexpr float kCollectibleBobPeriod = 2.4f;
+constexpr float kCollectibleBobHeight = 0.045f;
+constexpr float kCollectibleDepth = 0.05f;        // Relative to the sprite's scale (1.5 world units).
+constexpr float kCollectibleOutlinePixels = 2.0f; // Source texture pixels, drawn inside the silhouette.
+constexpr int kCollectibleRippleRadiusPixels = 24; // Maximum outward reach from the sprite's contour.
+constexpr float kCollectibleRipplePeriod = 1.2f; // Seconds between expanding waves.
+constexpr float kCollectibleRippleWidthPixels = 2.0f;
+constexpr float kCollectibleRippleOpacity = 0.9f;
+constexpr float kCollectBurstDuration = 0.28f; // Immediate flash, then a short outward pop.
+constexpr float kCollectBurstWidthPixels = 3.5f;
+constexpr float kCollectBurstOpacity = 1.0f;
+
 constexpr float kSpawnZ = -65.0f;
 constexpr float kDespawnZ = 8.0f;
 constexpr float kCollisionZRange = 0.95f;
@@ -27,8 +41,8 @@ constexpr float kLaneStartZ = -86.0f;
 constexpr int kLaneSegmentCount = 10;
 
 constexpr bool kMipmappedTextures = true;
-constexpr int kPsxInternalWidth = 240;
-constexpr int kPsxInternalHeight = 320;
+constexpr int kPsxInternalWidth = 480;
+constexpr int kPsxInternalHeight = 640;
 constexpr int kN64InternalWidth = kPsxInternalWidth;
 constexpr int kN64InternalHeight = kPsxInternalHeight;
 constexpr float kWorldCurvature = 0.0008f;

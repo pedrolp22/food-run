@@ -26,7 +26,8 @@ function(subway_library target alias)
 endfunction()
 
 subway_library(subway_math math src/engine/math/Math.cpp src/engine/math/TrackCurve.cpp)
-subway_library(subway_assets assets src/engine/assets/Json.cpp src/engine/assets/GltfLoader.cpp)
+subway_library(subway_assets assets src/engine/assets/Json.cpp src/engine/assets/GltfLoader.cpp
+    src/engine/assets/SpriteGeometry.cpp src/engine/assets/AlphaDistanceField.cpp)
 target_link_libraries(subway_assets PUBLIC subway::math)
 subway_library(subway_gameplay gameplay src/game/Simulation.cpp src/game/Collision.cpp)
 set_target_properties(subway_gameplay PROPERTIES EXCLUDE_FROM_ALL TRUE)
@@ -43,7 +44,7 @@ if(SUBWAY_BUILD_GRAPHICS)
     subway_embed_shaders("${CMAKE_CURRENT_BINARY_DIR}/generated")
     subway_library(subway_graphics graphics
         src/engine/graphics/ShaderProgram.cpp src/engine/graphics/Texture.cpp src/engine/graphics/TextureSampler.cpp
-        src/engine/graphics/Mesh.cpp src/engine/graphics/BuiltinMeshes.cpp
+        src/engine/graphics/Mesh.cpp src/engine/graphics/BuiltinMeshes.cpp src/engine/graphics/SpriteOutline.cpp
         src/engine/graphics/RenderTarget.cpp src/engine/graphics/Model.cpp
         src/engine/graphics/Scene.cpp src/engine/graphics/SceneRenderer.cpp)
     target_include_directories(subway_graphics PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")

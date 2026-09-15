@@ -25,7 +25,7 @@ class Renderer {
     void toggleN64Mode();
     engine::graphics::RenderMode renderMode() const;
     void render(float playerX, float roadScroll, float gameTime, std::span<const Entity> entities,
-                std::span<const CollectEffect> collectEffects);
+                std::span<const CollectEffect> collectEffects, float effectRemainder = 0);
 
   private:
     struct Impl;

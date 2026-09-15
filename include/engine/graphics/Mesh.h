@@ -32,4 +32,7 @@ class Mesh {
 };
 Mesh makeCubeMesh();
 Mesh makeQuadMesh();
+class Texture;
+// Requires a texture loaded with retainAlpha. Sprite attributes: position 0, UV 1, normal 2.
+Mesh makeSpriteMesh(const Texture& texture);
 } // namespace engine::graphics

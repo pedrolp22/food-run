@@ -24,6 +24,7 @@ class FixedStep {
     }
     void reset() { accumulator_ = 0; }
     float interpolation() const { return accumulator_ / step_; }
+    float remainder() const { return accumulator_; } // Seconds since the last completed simulation step.
 
   private:
     float step_;

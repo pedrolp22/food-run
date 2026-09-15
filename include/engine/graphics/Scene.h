@@ -7,6 +7,8 @@
 
 namespace engine::graphics {
 class Model;
+class Mesh;
+class SpriteOutline;
 struct Camera {
     math::Vec3 position = {0, 5, 9};
     math::Vec3 target = {0, 0, 0};
@@ -64,21 +66,40 @@ struct ModelInstance {
     math::Mat4 transform = math::identity();
     const Model* model = nullptr;
 };
+struct SpriteRipple {
+    const SpriteOutline* shape = nullptr;
+    float period = 1.2f; // Seconds between outgoing waves.
+    float widthPixels = 2;
+    float opacity = .85f;
+};
 struct Sprite {
     math::Mat4 model = math::identity();
     const Texture* texture = nullptr;
-    Color rippleColor;
+    Color rippleColor; // Outer ripple color; also tints the sprite's solid outline.
     float spawnTime = 0;
     float aspect = 1;
     float affineStrength = 0;
+    const Mesh* profile = nullptr; // Optional extruded silhouette; null draws a flat sprite.
+    float outlinePixels = 2;
+    SpriteRipple ripple{};
 };
 using DrawCommand = std::variant<Quad, Cube, ModelInstance, Sprite>;
+struct SpriteBurst {
+    math::Mat4 model = math::identity(); // Snapshot of the collected sprite's pose.
+    const SpriteOutline* shape = nullptr;
+    Color color;
+    float progress = 0; // One-shot lifetime, 0 (immediate flash) to 1 (fully faded).
+    float initialPhase = 0;
+    float widthPixels = 3.5f;
+    float opacity = 1;
+};
+using EffectCommand = std::variant<Quad, SpriteBurst>;
 struct Scene {
     Camera camera;
     DirectionalLight light;
     Sky sky;
     float time = 0;
     std::vector<DrawCommand> objects;
-    std::vector<Quad> effects; // Additive, depth-tested, no depth writes or shadow casting.
+    std::vector<EffectCommand> effects; // Additive, depth-tested, no depth writes or shadow casting.
 };
 } // namespace engine::graphics

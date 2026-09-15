@@ -30,7 +30,11 @@ int Game::run() {
             updateWindowTitle();
             titleUpdateTimer_ = 0.15f;
         }
-        renderer_.render(state.playerX, state.roadScroll, state.time, state.entities, state.collectEffects);
+        // Animate at presentation frequency, retaining the fixed timestep for game rules.
+        // Freeze at the final simulation time on game over; resetGame also clears the remainder.
+        const float visualTime = state.time + (state.gameOver ? 0 : clock_.remainder());
+        renderer_.render(state.playerX, state.roadScroll, visualTime, state.entities, state.collectEffects,
+                         clock_.remainder());
     }
     return 0;
 }

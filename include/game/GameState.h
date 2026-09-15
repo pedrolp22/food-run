@@ -21,4 +21,6 @@ struct GameState {
 float laneToX(int lane);
 // Deterministic domain operation, independent of rendering, input and wall-clock time.
 void resolveCollisions(GameState& state);
+// Transient feedback keeps advancing when gameplay is frozen.
+void updateCollectEffects(GameState& state, float deltaTime);
 } // namespace game
