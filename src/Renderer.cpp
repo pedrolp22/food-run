@@ -61,7 +61,21 @@ void Renderer::toggleN64Mode() {
 engine::graphics::RenderMode Renderer::renderMode() const {
     return impl_ ? impl_->graphics.mode() : engine::graphics::RenderMode::Normal;
 }
-void Renderer::render(float playerX, float roadScroll, float gameTime, std::span<const Entity> entities,
+void Renderer::renderMenu(float time, int selection) {
+    if (!impl_) {
+        return;
+    }
+    resizeViewport();
+    if (impl_->drawable.width <= 0 || impl_->drawable.height <= 0) {
+        return;
+    }
+    engine::graphics::Scene menuScene;
+    menuScene.time = time;
+    menuScene.menu = {.visible = true, .selection = selection, .time = time};
+    impl_->graphics.render(menuScene, impl_->drawable);
+    impl_->window.swap();
+}
+void Renderer::render(float playerX, float roadScroll, float gameTime, int score, std::span<const Entity> entities,
                       std::span<const CollectEffect> effects, float effectRemainder) {
     if (!impl_) {
         return;
@@ -70,7 +84,7 @@ void Renderer::render(float playerX, float roadScroll, float gameTime, std::span
     if (impl_->drawable.width <= 0 || impl_->drawable.height <= 0) {
         return;
     }
-    impl_->graphics.render(impl_->world.build(playerX, roadScroll, gameTime, entities, effects, effectRemainder),
+    impl_->graphics.render(impl_->world.build(playerX, roadScroll, gameTime, score, entities, effects, effectRemainder),
                            impl_->drawable);
     impl_->window.swap();
 }

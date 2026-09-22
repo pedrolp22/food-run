@@ -1,15 +1,23 @@
 #include "Game.h"
+#include "GameConfig.h"
 #include <SDL2/SDL.h>
 #include <chrono>
 #include <iomanip>
 #include <sstream>
 
+Game::~Game() {
+    if (controller_) {
+        SDL_GameControllerClose(controller_);
+    }
+}
 int Game::run() {
     if (!renderer_.initialize()) {
         return 1;
     }
     using Clock = std::chrono::steady_clock;
-    resetGame();
+    if (SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER) == 0 && SDL_NumJoysticks() > 0 && SDL_IsGameController(0)) {
+        controller_ = SDL_GameControllerOpen(0);
+    }
     running_ = true;
     auto previousFrame = Clock::now();
     while (running_) {
@@ -19,6 +27,10 @@ int Game::run() {
         handleEvents();
         if (!running_) {
             break;
+        }
+        if (inMenu_) {
+            renderer_.renderMenu(std::chrono::duration<float>(now.time_since_epoch()).count(), menuSelection_);
+            continue;
         }
         const bool wasGameOver = simulation_.state().gameOver;
         clock_.advance(elapsed, [this](float dt) {
@@ -33,7 +45,7 @@ int Game::run() {
         // Animate at presentation frequency, retaining the fixed timestep for game rules.
         // Freeze at the final simulation time on game over; resetGame also clears the remainder.
         const float visualTime = state.time + (state.gameOver ? 0 : clock_.remainder());
-        renderer_.render(state.playerX, state.roadScroll, visualTime, state.entities, state.collectEffects,
+        renderer_.render(state.playerX, state.roadScroll, visualTime, state.score, state.entities, state.collectEffects,
                          clock_.remainder());
     }
     return 0;
@@ -46,6 +58,46 @@ void Game::handleEvents() {
             continue;
         }
         if (event.type != SDL_KEYDOWN || event.key.repeat) {
+            if (inMenu_ && event.type == SDL_CONTROLLERBUTTONDOWN) {
+                switch (event.cbutton.button) {
+                case SDL_CONTROLLER_BUTTON_DPAD_UP:
+                    menuSelection_ = (menuSelection_ + 3) % 4;
+                    break;
+                case SDL_CONTROLLER_BUTTON_DPAD_DOWN:
+                    menuSelection_ = (menuSelection_ + 1) % 4;
+                    break;
+                case SDL_CONTROLLER_BUTTON_A:
+                    activateMenuSelection();
+                    break;
+                default:
+                    break;
+                }
+            } else if (!controller_ && event.type == SDL_CONTROLLERDEVICEADDED &&
+                       SDL_IsGameController(event.cdevice.which)) {
+                controller_ = SDL_GameControllerOpen(event.cdevice.which);
+            }
+            continue;
+        }
+        if (inMenu_) {
+            switch (event.key.keysym.sym) {
+            case SDLK_UP:
+            case SDLK_w:
+                menuSelection_ = (menuSelection_ + 3) % 4;
+                break;
+            case SDLK_DOWN:
+            case SDLK_s:
+                menuSelection_ = (menuSelection_ + 1) % 4;
+                break;
+            case SDLK_RETURN:
+            case SDLK_SPACE:
+                activateMenuSelection();
+                break;
+            case SDLK_ESCAPE:
+                running_ = false;
+                break;
+            default:
+                break;
+            }
             continue;
         }
         switch (event.key.keysym.sym) {
@@ -74,6 +126,14 @@ void Game::handleEvents() {
         default:
             break;
         }
+    }
+}
+void Game::activateMenuSelection() {
+    if (menuSelection_ == 0) {
+        resetGame();
+        inMenu_ = false;
+    } else if (menuSelection_ == 3) {
+        running_ = false;
     }
 }
 void Game::resetGame() {

@@ -24,7 +24,8 @@ class Renderer {
     void toggleRetroMode();
     void toggleN64Mode();
     engine::graphics::RenderMode renderMode() const;
-    void render(float playerX, float roadScroll, float gameTime, std::span<const Entity> entities,
+    void renderMenu(float time, int selection);
+    void render(float playerX, float roadScroll, float gameTime, int score, std::span<const Entity> entities,
                 std::span<const CollectEffect> collectEffects, float effectRemainder = 0);
 
   private:

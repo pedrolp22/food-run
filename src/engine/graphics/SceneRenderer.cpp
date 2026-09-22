@@ -254,8 +254,14 @@ struct SceneRenderer::Impl {
         matrix(sky.mvp, scale({2, 2, 1}));
         color(sky.topColor, scene.sky.top);
         color(sky.bottomColor, scene.sky.bottom);
+        glUniform1f(sky.time, scene.time);
+        glUniform1f(sky.nightBlend, scene.sky.nightBlend);
         quad.draw();
 
+        if (scene.sky.sunSize <= 0) {
+            glDepthMask(GL_TRUE);
+            return;
+        }
         glBlendFunc(GL_SRC_ALPHA, GL_ONE);
         const Vec3 dir = normalize(scene.light.direction);
         const Vec3 position = {scene.camera.position.x + dir.x * scene.sky.sunDistance,
@@ -272,6 +278,19 @@ struct SceneRenderer::Impl {
         quad.draw();
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         glDepthMask(GL_TRUE);
+    }
+    void menu(const MenuOverlay& overlay) const {
+        if (!overlay.visible) {
+            return;
+        }
+        glDisable(GL_DEPTH_TEST);
+        const auto& program = programs.menu;
+        program.shader.bind();
+        matrix(program.mvp, scale({2, 2, 1}));
+        glUniform1f(program.time, overlay.time);
+        glUniform1i(program.selection, overlay.selection);
+        quad.draw();
+        glEnable(GL_DEPTH_TEST);
     }
     template <class Program> void present(Size drawable, const Program& p, unsigned int source) const {
         glBindSampler(0, 0);
@@ -351,6 +370,7 @@ struct SceneRenderer::Impl {
         glClearColor(scene.sky.bottom.r, scene.sky.bottom.g, scene.sky.bottom.b, 1);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         background(scene);
+        menu(scene.menu);
         for (const auto& command : scene.objects) {
             std::visit([&](const auto& item) { draw(item, scene); }, command);
         }

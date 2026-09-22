@@ -10,7 +10,7 @@ namespace game {
 class WorldScene {
   public:
     explicit WorldScene(const GameAssets& assets);
-    const engine::graphics::Scene& build(float playerX, float roadScroll, float gameTime,
+    const engine::graphics::Scene& build(float playerX, float roadScroll, float gameTime, int score,
                                          std::span<const Entity> entities, std::span<const CollectEffect> effects,
                                          float effectRemainder = 0);
 
@@ -36,5 +36,6 @@ class WorldScene {
     const GameAssets& assets_;
     engine::math::TrackCurve track_;
     engine::graphics::Scene scene_;
+    float nightTransitionStart_ = -1;
 };
 } // namespace game

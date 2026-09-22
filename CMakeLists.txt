@@ -52,7 +52,23 @@ if(SUBWAY_BUILD_GRAPHICS)
 endif()
 
 if(SUBWAY_BUILD_PLATFORM)
-    find_package(SDL2 REQUIRED)
+    # Prefer a system SDL2 installation, but provide a self-contained fallback
+    # so a fresh CLion toolchain can configure this project without manual
+    # SDL2_DIR/CMAKE_PREFIX_PATH setup.
+    find_package(SDL2 CONFIG QUIET)
+    if(NOT TARGET SDL2::SDL2)
+        include(FetchContent)
+        FetchContent_Declare(SDL2
+            URL "https://github.com/libsdl-org/SDL/releases/download/release-2.30.12/SDL2-2.30.12.zip"
+            URL_HASH "SHA256=aa2808d0f2dc6b383c6689bf6d166e2de62db4d58be989e4b052acb31df0fba3"
+            DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+        )
+        set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+        set(SDL_STATIC ON CACHE BOOL "" FORCE)
+        set(SDL_TEST OFF CACHE BOOL "" FORCE)
+        set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
+        FetchContent_MakeAvailable(SDL2)
+    endif()
     subway_library(subway_platform platform src/engine/platform/Window.cpp)
     target_link_libraries(subway_platform PRIVATE subway_glad)
     target_compile_definitions(subway_platform PUBLIC SDL_MAIN_HANDLED)
@@ -78,9 +94,12 @@ if(SUBWAY_BUILD_GAME)
     add_executable(subway main.cpp)
     target_link_libraries(subway PRIVATE subway::application)
 endif()
-if(SUBWAY_BUILD_TESTS OR SUBWAY_ENABLE_GRAPHICS_TESTS)
+if((SUBWAY_BUILD_TESTS OR SUBWAY_ENABLE_GRAPHICS_TESTS)
+   AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/CMakeLists.txt")
     enable_testing()
     add_subdirectory(tests)
+elseif(SUBWAY_BUILD_TESTS OR SUBWAY_ENABLE_GRAPHICS_TESTS)
+    message(WARNING "Tests were requested, but the tests directory is not present; skipping tests.")
 endif()
 if(SUBWAY_BUILD_EXAMPLES)
     if(NOT SUBWAY_BUILD_GRAPHICS OR NOT SUBWAY_BUILD_PLATFORM)

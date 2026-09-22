@@ -29,9 +29,25 @@ WorldScene::WorldScene(const GameAssets& assets)
     scene_.objects.reserve(1000);
     scene_.effects.reserve(144);
 }
-const Scene& WorldScene::build(float playerX, float roadScroll, float gameTime, std::span<const Entity> entities,
+const Scene& WorldScene::build(float playerX, float roadScroll, float gameTime, int score, std::span<const Entity> entities,
                                std::span<const CollectEffect> effects, float effectRemainder) {
     scene_.time = gameTime;
+    // Score is monotonic during a run.  A reset returns immediately to morning;
+    // crossing 7,000 starts a deliberately short, stepped palette transition.
+    if (score < 7000) {
+        nightTransitionStart_ = -1;
+        scene_.sky.nightBlend = 0;
+    } else {
+        if (nightTransitionStart_ < 0) {
+            nightTransitionStart_ = gameTime;
+        }
+        scene_.sky.nightBlend = std::clamp((gameTime - nightTransitionStart_) / 1.5f, 0.0f, 1.0f);
+    }
+    const float paletteStep = std::floor(scene_.sky.nightBlend * 4.0f + 0.5f) / 4.0f;
+    scene_.light.ambient = 0.48f - 0.25f * paletteStep;
+    scene_.light.direction = {-0.7f + 0.25f * paletteStep, 1.4f - 0.35f * paletteStep,
+                              -0.9f + 0.15f * paletteStep};
+    scene_.sky.sunSize = 5.5f * (1.0f - paletteStep);
     scene_.objects.clear();
     scene_.effects.clear();
     addGround(roadScroll);
@@ -85,7 +101,7 @@ void WorldScene::addGround(float roadScroll) {
 void WorldScene::addBuildings(float roadScroll) {
     constexpr int kBuildingsPerSide = 4;
     constexpr float buildingSides[] = {-1.0f, 1.0f};
-    constexpr float kSkyscraperMinHeight = 9.0f;
+    constexpr float kSkyscraperMinHeight = 7.0f;
     constexpr Color roofColor = {0.45f, 0.45f, 0.48f};
     constexpr float kCellWidth = 2.6f;
     constexpr float kCellStartX = 4.5f;
@@ -130,10 +146,10 @@ void WorldScene::addBuildings(float roadScroll) {
                     h = 5.0f + hashFloat(seed, 5) * 3.5f;
                     wFactor = 1.15f;
                 } else if (roll < 0.85f) {
-                    h = 11.0f + hashFloat(seed, 5) * 4.0f;
+                    h = 7.0f + hashFloat(seed, 5) * 2.5f;
                     wFactor = 1.45f;
                 } else {
-                    h = 17.0f + hashFloat(seed, 5) * 8.0f;
+                    h = 10.0f + hashFloat(seed, 5) * 5.0f;
                     wFactor = 1.75f;
                 }
                 const float w = baseWidth * wFactor;

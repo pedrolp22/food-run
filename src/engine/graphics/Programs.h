@@ -81,9 +81,22 @@ struct SkyProgram {
     int mvp;
     int topColor;
     int bottomColor;
+    int time;
+    int nightBlend;
     SkyProgram()
         : shader(shaders::sky_vert, shaders::sky_frag, "sky"), mvp(shader.uniform("uMvp")),
-          topColor(shader.uniform("uTopColor")), bottomColor(shader.uniform("uBottomColor")) {}
+          topColor(shader.uniform("uTopColor")), bottomColor(shader.uniform("uBottomColor")),
+          time(shader.uniform("uTime")), nightBlend(shader.uniform("uNightBlend")) {}
+};
+
+struct MenuProgram {
+    ShaderProgram shader;
+    int mvp;
+    int time;
+    int selection;
+    MenuProgram()
+        : shader(shaders::menu_vert, shaders::menu_frag, "menu"), mvp(shader.uniform("uMvp")),
+          time(shader.uniform("uTime")), selection(shader.uniform("uSelection")) {}
 };
 
 struct SunProgram {
@@ -211,6 +224,7 @@ struct Programs {
     SpriteProgram sprite;
     RippleProgram ripple;
     SkyProgram sky;
+    MenuProgram menu;
     SunProgram sun;
     RoadProgram road;
     ModelProgram model;
