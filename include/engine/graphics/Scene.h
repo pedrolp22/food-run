@@ -35,13 +35,20 @@ struct DirectionalLight {
     math::Mat4 viewProjection() const;
 };
 struct Sky {
+    // The sky shader quantizes these into a small, dithered palette.
     Color top = {0.30f, 0.60f, 0.93f};
     Color bottom = {0.74f, 0.86f, 0.97f};
     Color sunColor = {1, 1, 1};
     float sunDistance = 100;
-    float sunSize = 6;
+    float sunSize = 5.5f; // Night sky supplies its own flat-shaded moon.
     float sunCore = 6.5f;
     float sunHaze = 2.2f;
+    float nightBlend = 0;
+};
+struct MenuOverlay {
+    bool visible = false;
+    int selection = 0;
+    float time = 0;
 };
 // Commands borrow assets. Keep those assets alive and unmoved until render() returns.
 struct Quad {
@@ -98,6 +105,7 @@ struct Scene {
     Camera camera;
     DirectionalLight light;
     Sky sky;
+    MenuOverlay menu;
     float time = 0;
     std::vector<DrawCommand> objects;
     std::vector<EffectCommand> effects; // Additive, depth-tested, no depth writes or shadow casting.
