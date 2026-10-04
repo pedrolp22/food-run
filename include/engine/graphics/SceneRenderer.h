@@ -8,10 +8,20 @@ namespace engine::graphics {
 struct RenderSettings {
     Size retroSize = {240, 320}; // PSX raster.
     int shadowMapSize = 2048;
-    float retroPixelStep = 0.5f;   // Half-pixel steps keep polygon movement subtle; zero disables snapping.
-    float modelAffineStrength = 0; // PSX only, [0, 1]: optional affine warping, disabled by default.
-    int n64Samples = 4;            // MSAA coverage samples, capped to driver support; 1 disables edge AA.
-    Size n64Size = retroSize;      // Match the PSX raster by default.
+    float retroPixelStep = 1;      // PSX integer screen coordinates; zero disables snapping.
+    float modelAffineStrength = 1; // PSX only, [0, 1]: full affine mapping by default.
+    bool psxSubdivideQuads = true; // Stable geometry grids keep large roads/facades readable.
+    float retroSnapStrength = .45f; // Blend toward the integer grid; 1 enables full hardware-style snapping.
+    float retroAffineStrength = .35f; // Shared PSX UV-warp intensity, multiplied by each command's strength.
+    float retroDitherStrength = 1; // PSX color/shade transitions and shadow-edge blends, [0, 1]; zero disables dither.
+    bool psxDitheredShadows = false; // Saturn-style shadow transparency, independent of RGB dithering.
+    float psxDitheredShadowDarkness = .8f; // Suppress ambient/sky light in covered pixels, [0, 1]; holes stay fully lit.
+    bool psxDistanceFog = false; // Stored preference, applied only in PSX mode; the game enables it initially.
+    float psxFogStart = 45; // Nonnegative camera-space start distance; leave nearby action clear.
+    float psxFogEnd = 125; // Finite end distance greater than start.
+    Color psxFogColor = {.74f, .86f, .97f}; // Custom daylight color when psxFogFollowsSky is false.
+    Color psxNightFogColor = {.38f, .31f, .40f};
+    bool psxFogFollowsSky = true; // Distance fade targets the regular horizon; does not recolor the sky/materials.
 };
 // Requires a current OpenGL 3.3 context. Does not own a window or swap buffers.
 class SceneRenderer {
@@ -26,6 +36,10 @@ class SceneRenderer {
     // Compatibility: these select/query the PSX style only.
     void setRetroMode(bool enabled);
     bool retroMode() const;
+    void setPsxDitheredShadows(bool enabled);
+    bool psxDitheredShadows() const; // Stored preference; applied only while PSX mode is active.
+    void setPsxDistanceFog(bool enabled);
+    bool psxDistanceFog() const; // Preserved across mode switches, independently of color/shadow dithering.
 
   private:
     struct Impl;

@@ -1,7 +1,9 @@
 #pragma once
 
+#include "engine/graphics/Material.h"
 #include "engine/graphics/Texture.h"
 #include "engine/math/Math.h"
+#include <optional>
 #include <variant>
 #include <vector>
 
@@ -16,6 +18,7 @@ struct Camera {
     float verticalFov = 60;
     float nearPlane = 0.1f;
     float farPlane = 200;
+    float fisheyeStrength = 0; // Presentation lens: 0 is rectilinear; clamped to [0, 0.25].
     math::Mat4 viewProjection(float aspect) const;
 };
 struct ShadowVolume {
@@ -35,15 +38,16 @@ struct DirectionalLight {
     math::Mat4 viewProjection() const;
 };
 struct Sky {
-    // The sky shader quantizes these into a small, dithered palette.
+    // Sky/cloud shading is continuous; retro modes apply their native color precision.
     Color top = {0.30f, 0.60f, 0.93f};
     Color bottom = {0.74f, 0.86f, 0.97f};
     Color sunColor = {1, 1, 1};
-    float sunDistance = 100;
+    float sunDistance = 100; // Together with sunSize, sets the sun's angular diameter.
     float sunSize = 5.5f; // Night sky supplies its own flat-shaded moon.
     float sunCore = 6.5f;
     float sunHaze = 2.2f;
     float nightBlend = 0;
+    float cloudCoverage = 0.40f; // 0: clear sky, 1: overcast; sparse noise-based cloud volumes.
 };
 struct MenuOverlay {
     bool visible = false;
@@ -60,18 +64,30 @@ struct Quad {
     math::Vec2 textureOffset;
     math::Vec2 worldSize = {1, 1};
     float opacity = 1;
-    float affineStrength = 0; // PSX only: opt in to affine warping with values up to 1.
+    float affineStrength = 1; // PSX only: 1 is console affine mapping; 0 opts out.
     float heat = 0;
+    bool skyscraperWindows = false; // Blue glass uses WindowMaterial; frames use SurfaceMaterial.
     bool receivesShadow = true;
     bool castsShadow = true;
+    WindowMaterial windowMaterial;
+    bool buildingSurface = false; // PBR-like facade/roof shading, also when there is no glass.
+    float haze = 0; // Atmospheric blend without making a distant surface transparent.
+    SurfaceMaterial surfaceMaterial{};
+    bool pbrSurface = false; // Enable the shared material on textured or colored quads.
+    std::optional<float> psxMinificationLodBias{}; // Opt in to nearest mip texels; empty preserves base-level sampling.
+    MaterialTextures materialTextures{}; // PBR surface data; maps follow the same tiling/affine UVs as the color texture.
 };
 struct Cube {
     math::Mat4 model = math::identity();
     Color color;
+    SurfaceMaterial surfaceMaterial{};
+    bool pbrSurface = false;
 };
 struct ModelInstance {
     math::Mat4 transform = math::identity();
     const Model* model = nullptr;
+    bool pbrSurface = false; // Use each primitive's imported material factors.
+    std::optional<SurfaceMaterial> materialOverride{}; // Optional finish override for this instance only.
 };
 struct SpriteRipple {
     const SpriteOutline* shape = nullptr;
@@ -85,7 +101,7 @@ struct Sprite {
     Color rippleColor; // Outer ripple color; also tints the sprite's solid outline.
     float spawnTime = 0;
     float aspect = 1;
-    float affineStrength = 0;
+    float affineStrength = 1; // PSX only; other modes retain perspective-correct UVs.
     const Mesh* profile = nullptr; // Optional extruded silhouette; null draws a flat sprite.
     float outlinePixels = 2;
     SpriteRipple ripple{};

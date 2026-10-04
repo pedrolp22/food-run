@@ -24,30 +24,15 @@ WorldScene::WorldScene(const GameAssets& assets)
     scene_.camera.position = {0, kCameraHeight, kCameraZ};
     scene_.camera.target = {0, kCameraTargetHeight, kCameraTargetZ};
     scene_.camera.verticalFov = kCameraVerticalFov;
+    scene_.camera.fisheyeStrength = kCameraFisheyeStrength;
     scene_.light.direction = {-0.7f, 1.4f, -0.9f};
     scene_.light.shadow.center = {0, 4, -32};
     scene_.objects.reserve(1000);
     scene_.effects.reserve(144);
 }
-const Scene& WorldScene::build(float playerX, float roadScroll, float gameTime, int score, std::span<const Entity> entities,
+const Scene& WorldScene::build(float playerX, float roadScroll, float gameTime, std::span<const Entity> entities,
                                std::span<const CollectEffect> effects, float effectRemainder) {
     scene_.time = gameTime;
-    // Score is monotonic during a run.  A reset returns immediately to morning;
-    // crossing 7,000 starts a deliberately short, stepped palette transition.
-    if (score < 7000) {
-        nightTransitionStart_ = -1;
-        scene_.sky.nightBlend = 0;
-    } else {
-        if (nightTransitionStart_ < 0) {
-            nightTransitionStart_ = gameTime;
-        }
-        scene_.sky.nightBlend = std::clamp((gameTime - nightTransitionStart_) / 1.5f, 0.0f, 1.0f);
-    }
-    const float paletteStep = std::floor(scene_.sky.nightBlend * 4.0f + 0.5f) / 4.0f;
-    scene_.light.ambient = 0.48f - 0.25f * paletteStep;
-    scene_.light.direction = {-0.7f + 0.25f * paletteStep, 1.4f - 0.35f * paletteStep,
-                              -0.9f + 0.15f * paletteStep};
-    scene_.sky.sunSize = 5.5f * (1.0f - paletteStep);
     scene_.objects.clear();
     scene_.effects.clear();
     addGround(roadScroll);
@@ -87,6 +72,9 @@ void WorldScene::addGround(float roadScroll) {
             command.model = multiply(translation({track_.offset(z), -0.04f - track_.drop(z), z}), rotationScale);
             track_.bendSegment(command.model, z, subLength, 1);
             command.texture = &assets_.texture(TextureId::Road);
+            command.pbrSurface = true;
+            command.surfaceMaterial = {1, 0, 1}; // The map separates dry aggregate, tar and road paint.
+            command.materialTextures = assets_.materialTextures(TextureId::Road);
             command.textureScale = {1, 1.0f / kRoadSubdivisions};
             command.textureOffset = {0, static_cast<float>(segment) + static_cast<float>(sub) / kRoadSubdivisions};
             command.worldSize = {roadWidth, subLength};
@@ -101,9 +89,8 @@ void WorldScene::addGround(float roadScroll) {
 void WorldScene::addBuildings(float roadScroll) {
     constexpr int kBuildingsPerSide = 4;
     constexpr float buildingSides[] = {-1.0f, 1.0f};
-    constexpr float kSkyscraperMinHeight = 7.0f;
-    constexpr Color roofColor = {0.45f, 0.45f, 0.48f};
-    constexpr float kCellWidth = 2.6f;
+    constexpr float kSkyscraperMinHeight = 9.0f;
+    constexpr float kCellWidth = 4.4f; // Leave room for the widest tower instead of intersecting its neighbor.
     constexpr float kCellStartX = 4.5f;
 
     struct Building {
@@ -146,10 +133,10 @@ void WorldScene::addBuildings(float roadScroll) {
                     h = 5.0f + hashFloat(seed, 5) * 3.5f;
                     wFactor = 1.15f;
                 } else if (roll < 0.85f) {
-                    h = 7.0f + hashFloat(seed, 5) * 2.5f;
+                    h = 11.0f + hashFloat(seed, 5) * 4.0f;
                     wFactor = 1.45f;
                 } else {
-                    h = 10.0f + hashFloat(seed, 5) * 5.0f;
+                    h = 17.0f + hashFloat(seed, 5) * 8.0f;
                     wFactor = 1.75f;
                 }
                 const float w = baseWidth * wFactor;
@@ -180,28 +167,36 @@ void WorldScene::addBuildings(float roadScroll) {
         if (building.fade <= 0.0f) {
             continue;
         }
+        const bool skyscraperWindows = building.texture == &assets_.texture(TextureId::Skyscraper);
+        // The skyscraper image is a complete facade, mapped once onto each side.
+        // Brick walls retain their fixed world-size tiles.
+        constexpr float tileWidth = 2.8f;
+        const float tileHeight = tileWidth / building.texture->aspect();
+        const float frontRepeat = skyscraperWindows ? 1.0f : building.w / tileWidth;
+        const float sideRepeat = skyscraperWindows ? 1.0f : building.d / tileWidth;
+        const float verticalRepeat = skyscraperWindows ? 1.0f : building.h / tileHeight;
         addTexturedQuad(*building.texture,
                         {building.x, building.cy, building.z + building.d * 0.5f, building.w, building.h, 1.0f},
-                        Face::FrontBack, 1.0f, 1.0f, {0, 0, 1}, building.fade);
+                        Face::FrontBack, frontRepeat, verticalRepeat, {0, 0, 1}, building.fade, skyscraperWindows, true);
         addTexturedQuad(*building.texture,
                         {building.x, building.cy, building.z - building.d * 0.5f, building.w, building.h, 1.0f},
-                        Face::FrontBack, 1.0f, 1.0f, {0, 0, -1}, building.fade);
+                        Face::FrontBack, frontRepeat, verticalRepeat, {0, 0, -1}, building.fade, skyscraperWindows, true);
         addTexturedQuad(*building.texture,
                         {building.x + building.w * 0.5f, building.cy, building.z, building.d, building.h, 1.0f},
-                        Face::Side, 1.0f, 1.0f, {1, 0, 0}, building.fade);
+                        Face::Side, sideRepeat, verticalRepeat, {1, 0, 0}, building.fade, skyscraperWindows, true);
         addTexturedQuad(*building.texture,
                         {building.x - building.w * 0.5f, building.cy, building.z, building.d, building.h, 1.0f},
-                        Face::Side, 1.0f, 1.0f, {-1, 0, 0}, building.fade);
+                        Face::Side, sideRepeat, verticalRepeat, {-1, 0, 0}, building.fade, skyscraperWindows, true);
     }
 
     for (const Building& building : buildings) {
         if (building.fade <= 0.0f) {
             continue;
         }
-        addColoredQuad(
-            roofColor,
+        addTexturedQuad(
+            assets_.texture(TextureId::BuildingTop),
             {building.x, building.h - 0.08f - track_.drop(building.z), building.z, building.w, building.d, 1.0f},
-            Face::Top, {0, 1, 0}, building.fade);
+            Face::Top, 1.0f, 1.0f, {0, 1, 0}, building.fade, false, true);
     }
 }
 
@@ -229,6 +224,10 @@ void WorldScene::addSidewalk(float roadScroll) {
                     multiply(translation({centerX, sidewalkTopY - track_.drop(centerZ), centerZ}), rotationScale);
                 track_.bendSegment(command.model, centerZ, subLength, 1);
                 command.texture = &sidewalkTexture;
+                command.pbrSurface = true;
+                command.surfaceMaterial = {1, 0, 1}; // Cement, dirt and aggregate have separate mapped finishes.
+                command.materialTextures = assets_.materialTextures(TextureId::Sidewalk);
+                command.psxMinificationLodBias = kPsxSidewalkLodBias;
                 command.normal = track_.normal(centerZ, subLength);
                 command.worldSize = {sidewalkWidth, subLength};
                 command.textureScale = {1, subLength / repeatLength};

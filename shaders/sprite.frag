@@ -44,7 +44,7 @@ vec4 shadeItem(vec2 tc, vec4 texColor) {
     }
     // Keep both textured faces readable throughout the turn, with darker, directionally lit sides.
     vec3 faceColor = texColor.rgb * (0.98 + 0.12 * abs(diffuse));
-    return vec4(mix(edgeColor, faceColor, interior), uThreePoint ? texColor.a : 1.0);
+    return vec4(mix(edgeColor, faceColor, interior), 1.0);
 }
 
 void main() {
@@ -53,7 +53,7 @@ void main() {
     if (uExtruded) {
         vec4 item = shadeItem(tc, texColor);
         if (vSide < 0.5 && texColor.a < 0.1) { discard; }
-        FragColor = item;
+        FragColor = vec4(distanceFog(item.rgb), item.a);
         return;
     }
     float alpha = step(0.1, texColor.a);
@@ -80,5 +80,5 @@ void main() {
     vec3 outlineColor = uRippleColor + vec3(0.30);
     vec3 finalColor = texColor.rgb * 1.35 + outlineColor * outline * (0.55 + 1.35 * ripple);
 
-    FragColor = vec4(finalColor, uThreePoint ? texColor.a : 1.0);
+    FragColor = vec4(distanceFog(finalColor), 1.0);
 }

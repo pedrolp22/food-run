@@ -39,7 +39,7 @@ void main() {
     if (uBurst) {
         vec4 pop = collectionPop(distance, aa);
         if (uBurstProgress >= 1.0 || distance >= uRadius || pop.a < 0.001) { discard; }
-        FragColor = pop;
+        FragColor = vec4(pop.rgb, pop.a * (1.0 - distanceFogAmount()));
         return;
     }
     float spacing = uRadius * 0.5;
@@ -53,5 +53,5 @@ void main() {
     float alpha = uOpacity * edge * fade * (0.08 * exp(-outward * 8.0) + 0.92 * wave);
     // Never tint the food itself or reveal the expanded quad's rectangular boundary.
     if (distance <= 0.0 || distance >= uRadius || alpha < 0.001) { discard; }
-    FragColor = vec4(uColor, alpha);
+    FragColor = vec4(uColor, alpha * (1.0 - distanceFogAmount()));
 }

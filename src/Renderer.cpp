@@ -12,12 +12,23 @@ struct Renderer::Impl {
     engine::graphics::SceneRenderer graphics;
     game::GameAssets assets;
     game::WorldScene world;
+    engine::graphics::Scene menuScene;
     engine::graphics::Size drawable;
     explicit Impl(const std::filesystem::path& root)
-        : window({GameConfig::kWindowTitle, {720, 1280}}),
-          graphics({.retroSize = {GameConfig::kPsxInternalWidth, GameConfig::kPsxInternalHeight},
-                    .n64Size = {GameConfig::kN64InternalWidth, GameConfig::kN64InternalHeight}}),
-          assets(root, GameConfig::kMipmappedTextures), world(assets), drawable(window.drawableSize()) {}
+        : window({.title = GameConfig::kWindowTitle, .size = {.width = 720, .height = 1280}}),
+          graphics({.retroSize = {.width = GameConfig::kPsxInternalWidth, .height = GameConfig::kPsxInternalHeight},
+                    .retroDitherStrength = GameConfig::kPsxDitherStrength,
+                    .psxDitheredShadows = GameConfig::kPsxDitheredShadows,
+                    .psxDitheredShadowDarkness = GameConfig::kPsxDitheredShadowDarkness,
+                    .psxDistanceFog = GameConfig::kPsxDistanceFog,
+                    .psxFogStart = GameConfig::kPsxFogStart,
+                    .psxFogEnd = GameConfig::kPsxFogEnd,
+                    .psxFogColor = {GameConfig::kPsxFogColor[0], GameConfig::kPsxFogColor[1], GameConfig::kPsxFogColor[2]},
+                    .psxNightFogColor = {GameConfig::kPsxNightFogColor[0], GameConfig::kPsxNightFogColor[1],
+                                         GameConfig::kPsxNightFogColor[2]},
+                    .psxFogFollowsSky = GameConfig::kPsxFogFollowsSky}),
+          assets(root, GameConfig::kMipmappedTextures), world(assets),
+          menuScene(world.build(0, 0, 0, {}, {})), drawable(window.drawableSize()) {}
 };
 Renderer::Renderer(std::filesystem::path assetRoot) : assetRoot_(std::move(assetRoot)) {
     if (assetRoot_.empty()) {
@@ -37,7 +48,7 @@ bool Renderer::initialize() {
         return false;
     }
 }
-void Renderer::resizeViewport() {
+void Renderer::resizeViewport() const {
     if (impl_) {
         impl_->drawable = impl_->window.drawableSize();
     }
@@ -47,21 +58,31 @@ void Renderer::setWindowTitle(const std::string& title) const {
         impl_->window.setTitle(title);
     }
 }
-void Renderer::toggleRetroMode() {
+void Renderer::toggleRetroMode() const {
     if (impl_) {
         impl_->graphics.setRetroMode(!impl_->graphics.retroMode());
     }
 }
-void Renderer::toggleN64Mode() {
+void Renderer::toggleDitheredShadows() const {
     if (impl_) {
-        using engine::graphics::RenderMode;
-        impl_->graphics.setMode(impl_->graphics.mode() == RenderMode::N64 ? RenderMode::Normal : RenderMode::N64);
+        impl_->graphics.setPsxDitheredShadows(!impl_->graphics.psxDitheredShadows());
     }
+}
+bool Renderer::ditheredShadows() const {
+    return impl_ && impl_->graphics.psxDitheredShadows();
+}
+void Renderer::toggleDistanceFog() const {
+    if (impl_) {
+        impl_->graphics.setPsxDistanceFog(!impl_->graphics.psxDistanceFog());
+    }
+}
+bool Renderer::distanceFog() const {
+    return impl_ && impl_->graphics.psxDistanceFog();
 }
 engine::graphics::RenderMode Renderer::renderMode() const {
     return impl_ ? impl_->graphics.mode() : engine::graphics::RenderMode::Normal;
 }
-void Renderer::renderMenu(float time, int selection) {
+void Renderer::renderMenu(const float time, const int selection) const {
     if (!impl_) {
         return;
     }
@@ -69,14 +90,14 @@ void Renderer::renderMenu(float time, int selection) {
     if (impl_->drawable.width <= 0 || impl_->drawable.height <= 0) {
         return;
     }
-    engine::graphics::Scene menuScene;
-    menuScene.time = time;
-    menuScene.menu = {.visible = true, .selection = selection, .time = time};
-    impl_->graphics.render(menuScene, impl_->drawable);
+    // Keep the opening world frozen; only the menu's selection pulse uses UI time.
+    impl_->menuScene.menu = {.visible = true, .selection = selection, .time = time};
+    impl_->graphics.render(impl_->menuScene, impl_->drawable);
     impl_->window.swap();
 }
-void Renderer::render(float playerX, float roadScroll, float gameTime, int score, std::span<const Entity> entities,
-                      std::span<const CollectEffect> effects, float effectRemainder) {
+void Renderer::render(const float playerX, const float roadScroll, const float gameTime, [[maybe_unused]] const int score,
+                      const std::span<const Entity> entities, const std::span<const CollectEffect> collectEffects,
+                      const float effectRemainder) const {
     if (!impl_) {
         return;
     }
@@ -84,7 +105,7 @@ void Renderer::render(float playerX, float roadScroll, float gameTime, int score
     if (impl_->drawable.width <= 0 || impl_->drawable.height <= 0) {
         return;
     }
-    impl_->graphics.render(impl_->world.build(playerX, roadScroll, gameTime, score, entities, effects, effectRemainder),
+    impl_->graphics.render(impl_->world.build(playerX, roadScroll, gameTime, entities, collectEffects, effectRemainder),
                            impl_->drawable);
     impl_->window.swap();
 }

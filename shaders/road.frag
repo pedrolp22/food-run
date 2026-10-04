@@ -27,5 +27,6 @@ void main() {
         heatBoost = 0.04 * uHeat * sin(uTime * 4.2 + vTexCoord.y * 3.0);
     }
     float light = uReceivesShadow ? shadowedLight(uLight, uAmbientLight) : uLight;
-    FragColor = vec4(sampleSurfaceLod(uTexture, tc, uLod).rgb * uColor * light * (1.0 + heatBoost), uAlpha);
+    vec3 surface = sampleSurfaceLod(uTexture, tc, uLod, vTexCoord).rgb * uColor * light * (1.0 + heatBoost);
+    FragColor = vec4(distanceFog(surface), uAlpha);
 }

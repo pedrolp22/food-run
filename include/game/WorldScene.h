@@ -10,9 +10,9 @@ namespace game {
 class WorldScene {
   public:
     explicit WorldScene(const GameAssets& assets);
-    const engine::graphics::Scene& build(float playerX, float roadScroll, float gameTime, int score,
-                                         std::span<const Entity> entities, std::span<const CollectEffect> effects,
-                                         float effectRemainder = 0);
+    const engine::graphics::Scene& build(float playerX, float roadScroll, float gameTime,
+                                       std::span<const Entity> entities, std::span<const CollectEffect> effects,
+                                       float effectRemainder = 0);
 
   private:
     enum class Face { FrontBack, Side, Top };
@@ -29,13 +29,13 @@ class WorldScene {
     void addCube(const Transform& transform, Color color, bool followsGround = false);
     void addModel(const engine::graphics::Model& model, const Transform& transform);
     void addTexturedQuad(const engine::graphics::Texture& texture, const Transform& transform, Face face,
-                         float texScaleU, float texScaleV, engine::math::Vec3 normal, float alpha = 1);
+                         float texScaleU, float texScaleV, engine::math::Vec3 normal, float alpha = 1,
+                         bool skyscraperWindows = false, bool buildingSurface = false);
     void addColoredQuad(Color color, const Transform& transform, Face face, engine::math::Vec3 normal, float alpha = 1,
                         bool receivesShadow = true, bool followsGround = false);
     engine::graphics::Sprite makeCollectibleSprite(const Entity& entity, float animationTime) const;
     const GameAssets& assets_;
     engine::math::TrackCurve track_;
     engine::graphics::Scene scene_;
-    float nightTransitionStart_ = -1;
 };
 } // namespace game

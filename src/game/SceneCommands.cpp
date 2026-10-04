@@ -12,15 +12,20 @@ void WorldScene::addCube(const Transform& transform, Color color, bool followsGr
     if (followsGround) {
         track_.bendSegment(model, transform.z, transform.scaleZ, 2);
     }
-    scene_.objects.emplace_back(Cube{model, color});
+    Cube command{model, color};
+    command.pbrSurface = true;
+    command.surfaceMaterial = followsGround ? SurfaceMaterial{.94f, 0, .7f} : SurfaceMaterial{.45f, 0, 1};
+    scene_.objects.emplace_back(command);
 }
 void WorldScene::addModel(const Model& model, const Transform& transform) {
-    scene_.objects.emplace_back(ModelInstance{multiply(translation({transform.x, transform.y, transform.z}),
-                                                       scale({transform.scaleX, transform.scaleY, transform.scaleZ})),
-                                              &model});
+    ModelInstance command{multiply(translation({transform.x, transform.y, transform.z}),
+                                   scale({transform.scaleX, transform.scaleY, transform.scaleZ})),
+                          &model};
+    command.pbrSurface = true;
+    scene_.objects.emplace_back(command);
 }
 void WorldScene::addTexturedQuad(const Texture& texture, const Transform& transform, Face face, float texScaleU,
-                                 float texScaleV, Vec3 normal, float alpha) {
+                                 float texScaleV, Vec3 normal, float alpha, bool skyscraperWindows, bool buildingSurface) {
     const Mat4 rotation = face == Face::Side  ? rotateY(kPi * 0.5f)
                           : face == Face::Top ? rotateX(kPi * 0.5f)
                                               : identity();
@@ -28,10 +33,18 @@ void WorldScene::addTexturedQuad(const Texture& texture, const Transform& transf
     command.model = multiply(translation({transform.x, transform.y, transform.z}),
                              multiply(rotation, scale({transform.scaleX, transform.scaleY, transform.scaleZ})));
     command.texture = &texture;
+    command.materialTextures = assets_.materialTextures(texture);
+    if (buildingSurface && command.materialTextures.properties) {
+        // Facade maps define glass and masonry directly, including future metal trim.
+        command.surfaceMaterial = {1, command.materialTextures.glass ? 1.0f : 0.0f, 1};
+    }
     command.normal = normal;
     command.textureScale = {texScaleU, texScaleV};
     command.worldSize = {transform.scaleX, transform.scaleY};
-    command.opacity = alpha;
+    command.opacity = buildingSurface ? 1.0f : alpha;
+    command.haze = buildingSurface ? 1.0f - alpha : 0.0f;
+    command.buildingSurface = buildingSurface;
+    command.skyscraperWindows = skyscraperWindows;
     scene_.objects.emplace_back(command);
 }
 void WorldScene::addColoredQuad(Color color, const Transform& transform, Face face, Vec3 normal, float alpha,
@@ -50,6 +63,8 @@ void WorldScene::addColoredQuad(Color color, const Transform& transform, Face fa
     command.color = color;
     command.opacity = alpha;
     command.receivesShadow = receivesShadow;
+    command.pbrSurface = receivesShadow;
+    command.surfaceMaterial = {.96f, 0, .55f};
     if (receivesShadow) {
         scene_.objects.emplace_back(command);
     } else {

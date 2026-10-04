@@ -4,12 +4,12 @@
 #include <utility>
 
 namespace engine::graphics {
-TextureSampler::TextureSampler(bool repeat) {
+TextureSampler::TextureSampler(bool repeat, bool mipmapped) {
     glGenSamplers(1, &id_);
     if (!id_) {
         throw std::runtime_error("Could not allocate texture sampler");
     }
-    glSamplerParameteri(id_, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glSamplerParameteri(id_, GL_TEXTURE_MIN_FILTER, mipmapped ? GL_NEAREST_MIPMAP_NEAREST : GL_NEAREST);
     glSamplerParameteri(id_, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glSamplerParameteri(id_, GL_TEXTURE_WRAP_S, repeat ? GL_REPEAT : GL_CLAMP_TO_EDGE);
     glSamplerParameteri(id_, GL_TEXTURE_WRAP_T, repeat ? GL_REPEAT : GL_CLAMP_TO_EDGE);

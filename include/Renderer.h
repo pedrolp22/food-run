@@ -19,14 +19,17 @@ class Renderer {
     Renderer& operator=(const Renderer&) = delete;
     bool initialize();
     int initSDL() { return initialize() ? 0 : -1; } // Compatibility with existing callers.
-    void resizeViewport();
+    void resizeViewport() const;
     void setWindowTitle(const std::string& title) const;
-    void toggleRetroMode();
-    void toggleN64Mode();
+    void toggleRetroMode() const;
+    void toggleDitheredShadows() const;
+    bool ditheredShadows() const;
+    void toggleDistanceFog() const;
+    bool distanceFog() const;
     engine::graphics::RenderMode renderMode() const;
-    void renderMenu(float time, int selection);
+    void renderMenu(float time, int selection) const;
     void render(float playerX, float roadScroll, float gameTime, int score, std::span<const Entity> entities,
-                std::span<const CollectEffect> collectEffects, float effectRemainder = 0);
+                std::span<const CollectEffect> collectEffects, float effectRemainder = 0) const;
 
   private:
     struct Impl;

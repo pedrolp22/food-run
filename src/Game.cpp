@@ -119,8 +119,12 @@ void Game::handleEvents() {
             renderer_.toggleRetroMode();
             updateWindowTitle();
             break;
-        case SDLK_n:
-            renderer_.toggleN64Mode();
+        case SDLK_f:
+            renderer_.toggleDistanceFog();
+            updateWindowTitle();
+            break;
+        case SDLK_h:
+            renderer_.toggleDitheredShadows();
             updateWindowTitle();
             break;
         default:
@@ -147,6 +151,12 @@ void Game::updateWindowTitle() {
     std::ostringstream title;
     title << GameConfig::kWindowTitle;
     title << " | " << engine::graphics::renderModeName(renderer_.renderMode());
+    if (renderer_.renderMode() == engine::graphics::RenderMode::Psx && renderer_.ditheredShadows()) {
+        title << " (Dithered Shadows)";
+    }
+    if (renderer_.renderMode() == engine::graphics::RenderMode::Psx && renderer_.distanceFog()) {
+        title << " (Fog)";
+    }
     if (state.gameOver) {
         title << " | Game Over - Press R | Score " << state.score;
     } else {

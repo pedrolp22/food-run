@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/assets/GltfLoader.h"
+#include "engine/graphics/Material.h"
 #include "engine/graphics/Mesh.h"
 #include "engine/graphics/Texture.h"
 
@@ -10,6 +11,22 @@ class Model {
     struct Material {
         std::array<float, 4> baseColor = {1, 1, 1, 1};
         Texture texture;
+        SurfaceMaterial surfaceMaterial{};
+        Texture properties;
+        Texture normal;
+        Texture occlusion;
+        float normalScale = 1;
+        float occlusionStrength = 1;
+        bool packedOcclusion = false;
+        bool packedReflectivity = false;
+        MaterialTextures textures() const {
+            return {.properties = properties.id() ? &properties : nullptr,
+                    .normal = normal.id() ? &normal : nullptr,
+                    .occlusion = occlusion.id() ? &occlusion : packedOcclusion ? &properties : nullptr,
+                    .normalScale = normalScale,
+                    .occlusionStrength = occlusionStrength,
+                    .packedReflectivity = packedReflectivity};
+        }
     };
     struct Primitive {
         Mesh mesh;

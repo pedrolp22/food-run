@@ -1,11 +1,11 @@
 #pragma once
 
 namespace engine::graphics {
-// A move-only nearest/base-level sampling override. Texture filtering is unchanged
+// A move-only nearest sampling override, optionally selecting texture mip levels. Filtering is unchanged
 // when this sampler is unbound. Destroy while its OpenGL context is current.
 class TextureSampler {
   public:
-    explicit TextureSampler(bool repeat = false);
+    explicit TextureSampler(bool repeat = false, bool mipmapped = false);
     ~TextureSampler();
     TextureSampler(TextureSampler&& other) noexcept;
     TextureSampler& operator=(TextureSampler&& other) noexcept;

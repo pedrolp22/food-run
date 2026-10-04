@@ -1,5 +1,6 @@
 #include "engine/graphics/Texture.h"
 #include <algorithm>
+#include <bit>
 #include <glad/glad.h>
 #include <memory>
 #include <stb_image.h>
@@ -60,14 +61,17 @@ Texture::Texture(const std::filesystem::path& path, TextureOptions options) : re
     const int wrap = options.repeat ? GL_REPEAT : GL_CLAMP_TO_EDGE;
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrap);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap);
-    const int minFilter = options.filter == TextureFilter::Mipmapped ? GL_LINEAR_MIPMAP_NEAREST
+    const int minFilter = options.filter == TextureFilter::Trilinear ? GL_LINEAR_MIPMAP_LINEAR
+                          : options.filter == TextureFilter::Mipmapped ? GL_LINEAR_MIPMAP_NEAREST
                           : options.filter == TextureFilter::Linear  ? GL_LINEAR
                                                                      : GL_NEAREST;
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, minFilter);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER,
-                    options.filter == TextureFilter::Linear ? GL_LINEAR : GL_NEAREST);
+                    options.filter == TextureFilter::Linear || options.filter == TextureFilter::Trilinear
+                        ? GL_LINEAR : GL_NEAREST);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, size_.width, size_.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.get());
     glGenerateMipmap(GL_TEXTURE_2D);
+    maxMipLevel_ = std::bit_width(static_cast<unsigned int>(std::max(size_.width, size_.height))) - 1;
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 Texture::~Texture() {
@@ -77,7 +81,8 @@ Texture::~Texture() {
 }
 Texture::Texture(Texture&& other) noexcept
     : id_(std::exchange(other.id_, 0)), size_(std::exchange(other.size_, {})),
-      repeat_(std::exchange(other.repeat_, false)), alpha_(std::move(other.alpha_)) {}
+      repeat_(std::exchange(other.repeat_, false)), maxMipLevel_(std::exchange(other.maxMipLevel_, 0)),
+      alpha_(std::move(other.alpha_)) {}
 Texture& Texture::operator=(Texture&& other) noexcept {
     if (this != &other) {
         if (id_) {
@@ -86,6 +91,7 @@ Texture& Texture::operator=(Texture&& other) noexcept {
         id_ = std::exchange(other.id_, 0);
         size_ = std::exchange(other.size_, {});
         repeat_ = std::exchange(other.repeat_, false);
+        maxMipLevel_ = std::exchange(other.maxMipLevel_, 0);
         alpha_ = std::move(other.alpha_);
     }
     return *this;

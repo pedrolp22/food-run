@@ -10,5 +10,5 @@ uniform bool uReceivesShadow;
 
 void main() {
     float light = uReceivesShadow ? shadowedLight(uLight, uAmbientLight) : uLight;
-    FragColor = vec4(uColor * light, uAlpha);
+    FragColor = vec4(distanceFog(uColor * light), uAlpha);
 }

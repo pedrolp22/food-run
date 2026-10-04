@@ -8,7 +8,7 @@ Mat4 Camera::viewProjection(float aspect) const {
     return multiply(perspective(radians(verticalFov), aspect, nearPlane, farPlane), lookAt(position, target, up));
 }
 float DirectionalLight::ambientForNormal(Vec3 normal) const {
-    return ambient * (0.95f + 0.30f * normal.y);
+    return std::clamp(ambient * (0.95f + 0.30f * normal.y), 0.0f, 1.0f);
 }
 float DirectionalLight::lightForNormal(Vec3 normal) const {
     const float a = ambientForNormal(normal);

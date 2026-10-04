@@ -7,7 +7,7 @@
 #include <vector>
 
 namespace engine::graphics {
-enum class TextureFilter { Nearest, Linear, Mipmapped };
+enum class TextureFilter { Nearest, Linear, Mipmapped, Trilinear };
 struct TextureOptions {
     TextureFilter filter = TextureFilter::Mipmapped;
     bool repeat = false;
@@ -28,6 +28,7 @@ class Texture {
     unsigned int id() const { return id_; }
     Size size() const { return size_; }
     bool repeats() const { return repeat_; }
+    int maxMipLevel() const { return maxMipLevel_; }
     std::span<const std::uint8_t> alphaMask() const { return alpha_; }
     float aspect() const { return size_.height > 0 ? static_cast<float>(size_.width) / size_.height : 1.0f; }
 
@@ -35,6 +36,7 @@ class Texture {
     unsigned int id_ = 0;
     Size size_;
     bool repeat_ = false;
+    int maxMipLevel_ = 0;
     std::vector<std::uint8_t> alpha_;
 };
 } // namespace engine::graphics

@@ -3,7 +3,7 @@
 #include <string_view>
 
 namespace engine::graphics {
-enum class RenderMode { Normal, Psx, N64 };
+enum class RenderMode { Normal, Psx };
 
 constexpr std::string_view renderModeName(RenderMode mode) {
     switch (mode) {
@@ -11,8 +11,6 @@ constexpr std::string_view renderModeName(RenderMode mode) {
         return "Normal";
     case RenderMode::Psx:
         return "PSX";
-    case RenderMode::N64:
-        return "N64";
     }
     return "Normal";
 }

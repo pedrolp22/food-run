@@ -8,6 +8,7 @@ struct TextureSpec {
     TextureId id;
     const char* file;
     bool repeat;
+    bool materialDetail = false;
 };
 struct ModelSpec {
     ModelId id;
@@ -15,11 +16,12 @@ struct ModelSpec {
     float height;
 };
 constexpr std::array textures = {
-    TextureSpec{TextureId::Road, "road.png", true},       TextureSpec{TextureId::Skyscraper, "skyscraper.png", true},
-    TextureSpec{TextureId::Wall, "wall_brick.png", true}, TextureSpec{TextureId::Water, "water.png", false},
+    TextureSpec{TextureId::Road, "road.png", true, true}, TextureSpec{TextureId::Skyscraper, "skyscraper.png", false, true},
+    TextureSpec{TextureId::Wall, "wall_brick.png", true, true}, TextureSpec{TextureId::Water, "water.png", false},
     TextureSpec{TextureId::Salad, "salad.png", false},    TextureSpec{TextureId::Salmon, "salmon.png", false},
     TextureSpec{TextureId::Soda, "soda.png", false},      TextureSpec{TextureId::Burger, "burger.png", false},
-    TextureSpec{TextureId::Fries, "fries.png", false},    TextureSpec{TextureId::Sidewalk, "sidewalk.png", true}};
+    TextureSpec{TextureId::Fries, "fries.png", false}, TextureSpec{TextureId::Sidewalk, "sidewalk.png", true, true},
+    TextureSpec{TextureId::BuildingTop, "building_top.png", false, true}};
 constexpr std::array models = {
     ModelSpec{ModelId::Cone, "traffic_cone", 1.0f}, ModelSpec{ModelId::Barrier, "barrier", 0.9f},
     ModelSpec{ModelId::TrashCan, "trash_can", 0.75f}, ModelSpec{ModelId::Bench, "bench", 0.7f}};
@@ -38,6 +40,17 @@ GameAssets::GameAssets(const std::filesystem::path& root, bool mipmapped) {
         const bool collectible = asset.id >= TextureId::Water && asset.id <= TextureId::Fries;
         textures_[index] = Texture(root / asset.file, {mipmapped ? TextureFilter::Mipmapped : TextureFilter::Nearest,
                                                        asset.repeat, true, collectible});
+        if (asset.materialDetail) {
+            const auto stem = std::filesystem::path(asset.file).stem().string();
+            surfaceMaps_[index] = Texture(root / "materials" / (stem + "_surface.png"),
+                                         {TextureFilter::Trilinear, asset.repeat, true});
+            normalMaps_[index] = Texture(root / "materials" / (stem + "_normal.png"),
+                                        {TextureFilter::Trilinear, asset.repeat, true});
+            if (asset.id == TextureId::Skyscraper) {
+                glassMaps_[index] = Texture(root / "materials" / (stem + "_glass.png"),
+                                           {TextureFilter::Trilinear, asset.repeat, true});
+            }
+        }
         if (collectible) {
             spriteMeshes_[index] = makeSpriteMesh(textures_[index]);
             // Stray alpha pixels in food photos should not emit separate little ripple rings.
@@ -45,8 +58,22 @@ GameAssets::GameAssets(const std::filesystem::path& root, bool mipmapped) {
         }
     }
     for (const auto& asset : models) {
-        models_[static_cast<std::size_t>(asset.id)] =
-            Model(root / "models" / asset.directory / "scene.gltf", asset.height);
+        auto data = engine::assets::loadGltf(root / "models" / asset.directory / "scene.gltf", asset.height);
+        for (auto& primitive : data.primitives) {
+            auto& material = primitive.material;
+            // The game's companions supplement assets that have no authored surface maps.
+            const auto companion =
+                material.baseTexture.parent_path() / (material.baseTexture.stem().string() + "_surface.png");
+            if (!material.baseTexture.empty() && material.metallicRoughnessTexture.empty() &&
+                std::filesystem::exists(companion)) {
+                material.metallicRoughnessTexture = companion;
+                material.packedReflectivity = true;
+                if (material.occlusionTexture.empty()) {
+                    material.occlusionTexture = companion;
+                }
+            }
+        }
+        models_[static_cast<std::size_t>(asset.id)] = Model(data);
     }
 }
 const Texture& GameAssets::texture(TextureId id) const {
@@ -54,6 +81,25 @@ const Texture& GameAssets::texture(TextureId id) const {
 }
 const Model& GameAssets::model(ModelId id) const {
     return models_.at(static_cast<std::size_t>(id));
+}
+MaterialTextures GameAssets::materialTextures(TextureId id) const {
+    const auto index = static_cast<std::size_t>(id);
+    const auto& properties = surfaceMaps_.at(index);
+    const auto& normal = normalMaps_.at(index);
+    const auto& glass = glassMaps_.at(index);
+    return {.properties = properties.id() ? &properties : nullptr,
+            .normal = normal.id() ? &normal : nullptr,
+            .occlusion = properties.id() ? &properties : nullptr,
+            .packedReflectivity = true,
+            .glass = glass.id() ? &glass : nullptr};
+}
+MaterialTextures GameAssets::materialTextures(const Texture& texture) const {
+    for (std::size_t index = 0; index < textures_.size(); ++index) {
+        if (&textures_[index] == &texture) {
+            return materialTextures(static_cast<TextureId>(index));
+        }
+    }
+    return {};
 }
 const Texture& GameAssets::collectible(const Entity& entity) const {
     return texture(collectibleTexture(entity));

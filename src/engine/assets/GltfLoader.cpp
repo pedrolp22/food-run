@@ -38,6 +38,37 @@ int integer(const JsonValue& node, const char* name, int fallback = -1) {
     return value ? value->asInt(fallback) : fallback;
 }
 
+float materialFactor(const JsonValue& node, const char* name, float fallback) {
+    const auto* value = node.obj(name);
+    if (!value) {
+        return fallback;
+    }
+    if (value->type != JsonValue::Type::Number || !std::isfinite(value->number) ||
+        value->number < 0 || value->number > 1) {
+        throw std::runtime_error(std::string("Invalid glTF material factor: ") + name);
+    }
+    return static_cast<float>(value->number);
+}
+
+std::filesystem::path materialTexturePath(const JsonValue& root, const JsonValue* info,
+                                         const std::string& baseDir) {
+    if (!info) {
+        return {};
+    }
+    if (integer(*info, "texCoord", 0) != 0) {
+        throw std::runtime_error("Only glTF material TEXCOORD_0 is supported");
+    }
+    const auto* textures = root.obj("textures");
+    const auto* texture = textures ? textures->at(integer(*info, "index")) : nullptr;
+    const auto* images = root.obj("images");
+    const auto* image = texture && images ? images->at(integer(*texture, "source")) : nullptr;
+    const auto* uri = image ? image->obj("uri") : nullptr;
+    if (!uri || uri->type != JsonValue::Type::String || uri->string.empty() || uri->string.starts_with("data:")) {
+        throw std::runtime_error("glTF material textures require an external image URI");
+    }
+    return std::filesystem::path(baseDir) / uri->string;
+}
+
 unsigned int readElementAsUint(const unsigned char* data, int componentType) {
     if (componentType == kCompUbyte) {
         return static_cast<unsigned int>(*data);
@@ -262,7 +293,6 @@ ModelData loadModel(const std::filesystem::path& path, float targetHeight) {
     const JsonValue* scenes = root.obj("scenes");
     const JsonValue* meshes = root.obj("meshes");
     const JsonValue* materials = root.obj("materials");
-    const JsonValue* images = root.obj("images");
     if (!buffers || !nodes || !scenes || !meshes || buffers->size() != 1) {
 
         throw std::runtime_error("Could not import glTF: " + gltfPath);
@@ -440,6 +470,8 @@ ModelData loadModel(const std::filesystem::path& path, float targetHeight) {
                 if (material) {
                     const JsonValue* pbr = material->obj("pbrMetallicRoughness");
                     if (pbr) {
+                        data.material.roughness = materialFactor(*pbr, "roughnessFactor", 1);
+                        data.material.metallic = materialFactor(*pbr, "metallicFactor", 1);
                         const JsonValue* colorFactor = pbr->obj("baseColorFactor");
                         if (colorFactor && colorFactor->size() == 4) {
                             data.material.baseColor[0] = colorFactor->at(0)->asFloat(1.0f);
@@ -447,19 +479,26 @@ ModelData loadModel(const std::filesystem::path& path, float targetHeight) {
                             data.material.baseColor[2] = colorFactor->at(2)->asFloat(1.0f);
                             data.material.baseColor[3] = colorFactor->at(3)->asFloat(1.0f);
                         }
-                        const JsonValue* baseTexture = pbr->obj("baseColorTexture");
-                        if (baseTexture) {
-                            const int textureIndex = integer(*baseTexture, "index");
-                            const JsonValue* textures = root.obj("textures");
-                            const JsonValue* texture = textures ? textures->at(textureIndex) : nullptr;
-                            const JsonValue* source = texture ? texture->obj("source") : nullptr;
-                            const int imageIndex = source ? source->asInt(0) : 0;
-                            const JsonValue* image = images ? images->at(imageIndex) : nullptr;
-                            const JsonValue* imageUri = image ? image->obj("uri") : nullptr;
-                            if (imageUri && imageUri->type == JsonValue::Type::String) {
-                                data.material.baseTexture = std::filesystem::path(baseDir) / imageUri->string;
+                        data.material.baseTexture = materialTexturePath(root, pbr->obj("baseColorTexture"), baseDir);
+                        data.material.metallicRoughnessTexture =
+                            materialTexturePath(root, pbr->obj("metallicRoughnessTexture"), baseDir);
+                    }
+                    const auto* normal = material->obj("normalTexture");
+                    data.material.normalTexture = materialTexturePath(root, normal, baseDir);
+                    if (normal) {
+                        const auto* scale = normal->obj("scale");
+                        if (scale) {
+                            if (scale->type != JsonValue::Type::Number || !std::isfinite(scale->number) ||
+                                std::abs(scale->number) > std::numeric_limits<float>::max()) {
+                                throw std::runtime_error("Invalid glTF normal scale");
                             }
+                            data.material.normalScale = static_cast<float>(scale->number);
                         }
+                    }
+                    const auto* occlusion = material->obj("occlusionTexture");
+                    data.material.occlusionTexture = materialTexturePath(root, occlusion, baseDir);
+                    if (occlusion) {
+                        data.material.occlusionStrength = materialFactor(*occlusion, "strength", 1);
                     }
                 }
             }
