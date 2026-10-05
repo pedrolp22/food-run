@@ -2,6 +2,7 @@
 #include "Programs.h"
 #include "engine/graphics/Mesh.h"
 #include "engine/graphics/Model.h"
+#include "engine/graphics/ReflectionMap.h"
 #include "engine/graphics/RenderTarget.h"
 #include "engine/graphics/SpriteOutline.h"
 #include "engine/graphics/TextureSampler.h"
@@ -9,19 +10,30 @@
 #include <cmath>
 #include <glad/glad.h>
 #include <stdexcept>
+#include <type_traits>
 #include <vector>
 
 namespace engine::graphics {
 using namespace math;
 namespace {
 RenderSettings checkedSettings(RenderSettings settings) {
+    if (settings.worldReflectionMapSize < 0) {
+        throw std::invalid_argument("World reflection map size must be nonnegative");
+    }
+    if (settings.planarReflectionSize < 0 || settings.maxPlanarReflections < 0 ||
+        !std::isfinite(settings.planarReflectionDistance) || settings.planarReflectionDistance <= 0 ||
+        !std::isfinite(settings.planarReflectionFadeDistance) || settings.planarReflectionFadeDistance < 0) {
+        throw std::invalid_argument(
+            "Planar reflection size/count/fade must be nonnegative and distance must be positive");
+    }
     if (!std::isfinite(settings.retroPixelStep) || settings.retroPixelStep < 0 ||
         !std::isfinite(settings.modelAffineStrength) || settings.modelAffineStrength < 0 ||
         settings.modelAffineStrength > 1) {
         throw std::invalid_argument("Retro pixel step must be nonnegative and affine strength must be in [0, 1]");
     }
-    if (!std::isfinite(settings.retroSnapStrength) || settings.retroSnapStrength < 0 || settings.retroSnapStrength > 1 ||
-        !std::isfinite(settings.retroAffineStrength) || settings.retroAffineStrength < 0 || settings.retroAffineStrength > 1) {
+    if (!std::isfinite(settings.retroSnapStrength) || settings.retroSnapStrength < 0 ||
+        settings.retroSnapStrength > 1 || !std::isfinite(settings.retroAffineStrength) ||
+        settings.retroAffineStrength < 0 || settings.retroAffineStrength > 1) {
         throw std::invalid_argument("Retro snap and affine intensities must be in [0, 1]");
     }
     if (!std::isfinite(settings.psxFogStart) || settings.psxFogStart < 0 || !std::isfinite(settings.psxFogEnd) ||
@@ -57,6 +69,83 @@ void texture(int location, unsigned int id, int unit = 0) {
     glUniform1i(location, unit);
     glActiveTexture(GL_TEXTURE0);
 }
+bool reflectiveFacade(const Quad& surface) {
+    return surface.texture && surface.opacity > 0 && surface.windowMaterial.worldReflections &&
+           (surface.skyscraperWindows || (surface.buildingSurface && surface.materialTextures.glass));
+}
+Vec3 center(const Quad& surface) {
+    return {surface.model.values[12], surface.model.values[13], surface.model.values[14]};
+}
+Vec3 mirrorPoint(Vec3 point, Vec3 normal, float planeOffset) {
+    const float distance = 2 * (dot(normal, point) - planeOffset);
+    return {point.x - normal.x * distance, point.y - normal.y * distance, point.z - normal.z * distance};
+}
+float smoothTransition(float start, float end, float value) {
+    const float t = std::clamp((value - start) / (end - start), 0.0f, 1.0f);
+    return t * t * (3 - 2 * t);
+}
+struct ScreenBounds {
+    float left = 1, bottom = 1, right = -1, top = -1;
+};
+std::optional<ScreenBounds> facadeBounds(const Quad& surface, const Mat4& viewProjection) {
+    const auto& m = multiply(viewProjection, surface.model).values;
+    std::array<std::array<float, 4>, 4> corners{};
+    int index = 0;
+    for (float x : {-.5f, .5f}) {
+        for (float y : {-.5f, .5f}) {
+            corners[index++] = {m[0] * x + m[4] * y + m[12], m[1] * x + m[5] * y + m[13], m[2] * x + m[6] * y + m[14],
+                                m[3] * x + m[7] * y + m[15]};
+        }
+    }
+    // Reject the rectangle only if every corner is outside one frustum plane.
+    for (int axis = 0; axis < 3; ++axis) {
+        for (float sign : {-1.0f, 1.0f}) {
+            if (std::all_of(corners.begin(), corners.end(),
+                            [&](const auto& corner) { return corner[3] + sign * corner[axis] < 0; })) {
+                return {};
+            }
+        }
+    }
+    ScreenBounds bounds;
+    for (const auto& point : corners) {
+        if (point[3] <= .001f) {
+            return ScreenBounds{-1, -1, 1, 1}; // Conservatively retain near-plane crossings.
+        }
+        bounds.left = std::min(bounds.left, point[0] / point[3]);
+        bounds.right = std::max(bounds.right, point[0] / point[3]);
+        bounds.bottom = std::min(bounds.bottom, point[1] / point[3]);
+        bounds.top = std::max(bounds.top, point[1] / point[3]);
+    }
+    bounds.left = std::max(bounds.left, -1.0f);
+    bounds.right = std::min(bounds.right, 1.0f);
+    bounds.bottom = std::max(bounds.bottom, -1.0f);
+    bounds.top = std::min(bounds.top, 1.0f);
+    if (bounds.right <= bounds.left || bounds.top <= bounds.bottom) {
+        return {};
+    }
+    return bounds;
+}
+float facadeDistance(const Quad& surface, Vec3 point) {
+    const auto& m = surface.model.values;
+    const Vec3 x = {m[0], m[1], m[2]}, y = {m[4], m[5], m[6]};
+    const float width = std::sqrt(dot(x, x)), height = std::sqrt(dot(y, y));
+    const Vec3 tangent = normalize(x), bitangent = normalize(y);
+    const auto offset = point - center(surface);
+    const float u = std::clamp(dot(offset, tangent), -width * .5f, width * .5f);
+    const float v = std::clamp(dot(offset, bitangent), -height * .5f, height * .5f);
+    const Vec3 closestOffset = {offset.x - tangent.x * u - bitangent.x * v, offset.y - tangent.y * u - bitangent.y * v,
+                                offset.z - tangent.z * u - bitangent.z * v};
+    return std::sqrt(dot(closestOffset, closestOffset));
+}
+struct PlanarCapture {
+    Vec3 normal;
+    float offset = 0;
+    ScreenBounds bounds;
+    float score = 0;
+    Mat4 viewProjection;
+    RenderTarget* target = nullptr;
+    float strength = 1;
+};
 Mesh subdividedQuad(int divisions) {
     std::vector<float> vertices;
     std::vector<unsigned int> indices;
@@ -89,18 +178,34 @@ struct SceneRenderer::Impl {
     RenderTarget retro;
     RenderTarget shadow;
     std::unique_ptr<RenderTarget> cameraTarget;
+    std::unique_ptr<ReflectionMap> reflectionMap;
+    std::vector<std::unique_ptr<RenderTarget>> planarTargets;
+    std::vector<PlanarCapture> planarCaptures;
+    std::array<float, 4> reflectionClipPlane = {0, 0, 0, 1};
+    ScreenBounds skyViewBounds = {-1, -1, 1, 1};
+    float skyProjectionAspect = 0;
+    bool capturingReflections = false;
+    bool reflectionsReady = false;
     TextureSampler retroClamp;
     TextureSampler retroRepeat{true};
     TextureSampler materialClamp{false, true};
     TextureSampler materialRepeat{true, true};
+    TextureSampler panoramaSampler;
     RenderMode mode = RenderMode::Normal;
     Mat4 viewProjection;
     Mat4 lightProjection;
     Size renderSize;
 
     explicit Impl(RenderSettings config)
-        : settings(config), retro(config.retroSize, RenderTarget::Kind::ColorDepth),
-          shadow({config.shadowMapSize, config.shadowMapSize}, RenderTarget::Kind::Shadow) {}
+        : settings(config), retro(config.retroSize, RenderTarget::Kind::ColorDepthAlpha),
+          shadow({config.shadowMapSize, config.shadowMapSize}, RenderTarget::Kind::Shadow) {
+        // The supplied panorama need not have matching left/right edges. Its
+        // mirrored horizontal wrap joins its edges; the horizon/pole stay clamped.
+        // Keep the sampler's nearest-neighbor filtering and use only the source level.
+        glSamplerParameteri(panoramaSampler.id(), GL_TEXTURE_WRAP_S, GL_MIRRORED_REPEAT);
+        glSamplerParameteri(panoramaSampler.id(), GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glSamplerParameterf(panoramaSampler.id(), GL_TEXTURE_MAX_LOD, 0);
+    }
 
     bool psx() const { return mode == RenderMode::Psx; }
     bool distanceFog() const { return psx() && settings.psxDistanceFog; }
@@ -117,8 +222,10 @@ struct SceneRenderer::Impl {
     template <class Program> void snap(const Program& program) const {
         glUniform3f(program.snap, renderSize.width, renderSize.height, psx() ? settings.retroPixelStep : 0);
         glUniform1f(program.snapStrength, psx() ? settings.retroSnapStrength : 0);
-        glUniform2f(program.fogRange, distanceFog() ? settings.psxFogStart : 0,
-                    distanceFog() ? settings.psxFogEnd : 0);
+        glUniform2f(program.fogRange, distanceFog() ? settings.psxFogStart : 0, distanceFog() ? settings.psxFogEnd : 0);
+        if constexpr (requires { program.reflectionClipPlane; }) {
+            glUniform4fv(program.reflectionClipPlane, 1, reflectionClipPlane.data());
+        }
     }
     float affineStrength(float commandStrength) const {
         return psx() ? std::clamp(commandStrength, 0.0f, 1.0f) * settings.retroAffineStrength : 0;
@@ -181,20 +288,20 @@ struct SceneRenderer::Impl {
         glUniform1i(u.packedReflectivity, maps.packedReflectivity);
         glUniform1i(u.retro, psx());
         glUniform1f(u.normalScale, std::isfinite(maps.normalScale) ? maps.normalScale : 0);
-        glUniform1f(u.occlusionStrength, std::isfinite(maps.occlusionStrength)
-                                           ? std::clamp(maps.occlusionStrength, 0.0f, 1.0f) : 0);
+        glUniform1f(u.occlusionStrength,
+                    std::isfinite(maps.occlusionStrength) ? std::clamp(maps.occlusionStrength, 0.0f, 1.0f) : 0);
     }
     template <class Program> void materialEnvironment(const Program& p, const Scene& scene) const {
         const auto sun = normalize(scene.light.direction);
         glUniform3f(p.sunDir, sun.x, sun.y, sun.z);
         glUniform3f(p.cameraPosition, scene.camera.position.x, scene.camera.position.y, scene.camera.position.z);
         const float night = std::floor(std::clamp(scene.sky.nightBlend, 0.0f, 1.0f) * 4.0f + 0.5f) / 4.0f;
-        color(p.skyColor, {scene.sky.top.r * (1 - night) + 0.045f * night,
-                           scene.sky.top.g * (1 - night) + 0.055f * night,
-                           scene.sky.top.b * (1 - night) + 0.14f * night});
-        color(p.hazeColor, {scene.sky.bottom.r * (1 - night) + 0.38f * night,
-                            scene.sky.bottom.g * (1 - night) + 0.31f * night,
-                            scene.sky.bottom.b * (1 - night) + 0.40f * night});
+        color(p.skyColor,
+              {scene.sky.top.r * (1 - night) + 0.045f * night, scene.sky.top.g * (1 - night) + 0.055f * night,
+               scene.sky.top.b * (1 - night) + 0.14f * night});
+        color(p.hazeColor,
+              {scene.sky.bottom.r * (1 - night) + 0.38f * night, scene.sky.bottom.g * (1 - night) + 0.31f * night,
+               scene.sky.bottom.b * (1 - night) + 0.40f * night});
         color(p.sunColor, scene.sky.sunColor);
     }
     void beginMaterial(const Mat4& model, const Scene& scene, const SurfaceMaterial& finish) const {
@@ -224,17 +331,6 @@ struct SceneRenderer::Impl {
         glUniform1f(p.haze, 0);
         glUniform1f(p.time, scene.time);
         glUniform1f(p.heat, 0);
-    }
-    float mipLevel(const Quad& command, const Camera& camera) const {
-        const Vec3 offset =
-            Vec3{command.model.values[12], command.model.values[13], command.model.values[14]} - camera.position;
-        const float distance = std::sqrt(dot(offset, offset));
-        const float viewHalfHeight = std::max(distance, 0.1f) * std::tan(radians(camera.verticalFov) * 0.5f);
-        const auto size = command.texture->size();
-        const float worldPerTexel = std::max(command.worldSize.x / (size.width * command.textureScale.x),
-                                             command.worldSize.y / (size.height * command.textureScale.y));
-        const float pixelsPerTexel = worldPerTexel * renderSize.height / (viewHalfHeight * 2.0f);
-        return std::clamp(std::ceil(std::log2(1.0f / pixelsPerTexel)), 0.0f, 8.0f);
     }
     void shadowDraw(const Mat4& model, unsigned int textureId = 0, float opacity = 1) const {
         const auto& p = programs.shadow;
@@ -286,7 +382,9 @@ struct SceneRenderer::Impl {
                 surfaceTexture(p, *command.texture);
                 psxMinification(p, command);
                 glUniform1i(p.hasTexture, true);
-                glUniform1f(p.lod, mode != RenderMode::Normal ? 0 : mipLevel(command, scene.camera));
+                // Use the pixel's UV footprint in Normal mode; a single rounded
+                // LOD for an entire curved segment loses near asphalt detail.
+                glUniform1f(p.lod, mode != RenderMode::Normal ? 0 : -1);
             }
             glUniform2f(p.texScale, command.textureScale.x, command.textureScale.y);
             glUniform2f(p.texOffset, command.textureOffset.x, command.textureOffset.y);
@@ -313,10 +411,56 @@ struct SceneRenderer::Impl {
                 glUniform1f(p.windowReflectivity, std::clamp(command.windowMaterial.reflectivity, 0.0f, 1.0f));
                 materialFinish(p, command.surfaceMaterial);
                 materialMaps(p, command.materialTextures);
+                // Unit 6 is distinct from albedo, shadow and linear material data.
+                const bool worldReflection =
+                    reflectionsReady && !capturingReflections && command.windowMaterial.worldReflections;
+                glActiveTexture(GL_TEXTURE6);
+                glBindTexture(GL_TEXTURE_CUBE_MAP, worldReflection ? reflectionMap->texture() : 0);
+                glBindSampler(6, 0);
+                glUniform1i(p.worldReflection, 6);
+                glUniform1i(p.hasWorldReflection, worldReflection);
+                glUniform1f(p.worldReflectionMaxLod, worldReflection ? reflectionMap->maxMipLevel() : 0);
+                glActiveTexture(GL_TEXTURE0);
+                const PlanarCapture* planar = nullptr;
+                if (!capturingReflections && command.windowMaterial.worldReflections) {
+                    const float offset = dot(normal, center(command));
+                    for (const auto& capture : planarCaptures) {
+                        if (dot(normal, capture.normal) > .9999f && std::abs(offset - capture.offset) < .01f) {
+                            planar = &capture;
+                            break;
+                        }
+                    }
+                }
+                texture(p.planarReflection, planar ? planar->target->texture() : 0, 7);
+                glBindSampler(7, 0);
+                glUniform1i(p.hasPlanarReflection, planar != nullptr);
+                float planarStrength = planar ? planar->strength : 0;
+                if (planar && settings.planarReflectionFadeDistance > 0) {
+                    const float fadeStart =
+                        std::max(0.0f, settings.planarReflectionDistance - settings.planarReflectionFadeDistance);
+                    planarStrength *= 1 - smoothTransition(fadeStart, settings.planarReflectionDistance,
+                                                           facadeDistance(command, scene.camera.position));
+                }
+                glUniform1f(p.planarReflectionStrength, planarStrength);
+                matrix(p.planarReflectionViewProjection, planar ? planar->viewProjection : identity());
+                glUniform1f(p.planarReflectionMaxLod, planar ? planar->target->maxMipLevel() : 0);
+                glUniform1f(p.windowReflectance, std::isfinite(command.windowMaterial.reflectance)
+                                                     ? std::clamp(command.windowMaterial.reflectance, 0.0f, 1.0f)
+                                                     : 0);
+                glUniform1f(p.windowBackingTint, std::isfinite(command.windowMaterial.backingTint)
+                                                     ? std::clamp(command.windowMaterial.backingTint, 0.0f, 1.0f)
+                                                     : 0);
+                const auto* panorama = scene.sky.panorama;
+                const bool skyReflection = !capturingReflections && settings.worldReflectionMapSize &&
+                                           command.windowMaterial.worldReflections && panorama && panorama->id();
+                texture(p.panorama, skyReflection ? panorama->id() : 0, 8);
+                glBindSampler(8, skyReflection ? panoramaSampler.id() : 0);
+                glUniform1i(p.hasSkyPanorama, skyReflection);
+                glUniform1f(p.skyPanoramaNight, std::floor(std::clamp(scene.sky.nightBlend, 0.0f, 1.0f) * 4 + .5f) / 4);
                 glUniform1i(p.receivesShadow, command.receivesShadow);
                 glUniform2f(p.texScale, command.textureScale.x, command.textureScale.y);
                 glUniform2f(p.texOffset, command.textureOffset.x, command.textureOffset.y);
-                glUniform1f(p.lod, mode != RenderMode::Normal ? 0 : mipLevel(command, scene.camera));
+                glUniform1f(p.lod, mode != RenderMode::Normal ? 0 : -1);
                 glUniform1f(p.ambientLight, ambient);
                 glUniform1f(p.alpha, command.opacity);
                 glUniform1f(p.affine, affineStrength(command.affineStrength));
@@ -329,7 +473,7 @@ struct SceneRenderer::Impl {
                 glUniform1i(p.receivesShadow, command.receivesShadow);
                 glUniform2f(p.texScale, command.textureScale.x, command.textureScale.y);
                 glUniform2f(p.texOffset, command.textureOffset.x, command.textureOffset.y);
-                glUniform1f(p.lod, mode != RenderMode::Normal ? 0 : mipLevel(command, scene.camera));
+                glUniform1f(p.lod, mode != RenderMode::Normal ? 0 : -1);
                 glUniform1f(p.light, light);
                 glUniform1f(p.ambientLight, ambient);
                 glUniform1f(p.alpha, command.opacity);
@@ -415,7 +559,15 @@ struct SceneRenderer::Impl {
         color(p.rippleColor, command.rippleColor);
         glUniform1f(p.aspect, command.aspect);
         surfaceTexture(p, *command.texture);
+        if (psx()) {
+            // Alpha marks dither eligibility in the retro target. Keep normal
+            // sprite color blending while clearing the mask only where depth/cutout tests pass.
+            glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ZERO, GL_ZERO);
+        }
         (command.profile ? *command.profile : quad).draw();
+        if (psx()) {
+            glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+        }
     }
     void drawRippleShape(const Mat4& model, const SpriteOutline* shape, Color tint, float width, float opacity,
                          float phase, float burstProgress = -1) const {
@@ -436,7 +588,14 @@ struct SceneRenderer::Impl {
         glUniform1f(p.opacity, std::clamp(opacity, 0.0f, 1.0f));
         glUniform1i(p.burst, burstProgress >= 0);
         glUniform1f(p.burstProgress, std::max(burstProgress, 0.0f));
+        if (psx()) {
+            // Sprite ripples and collection bursts also bypass color dithering.
+            glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE, GL_ZERO, GL_ZERO);
+        }
         quad.draw();
+        if (psx()) {
+            glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE, GL_ZERO, GL_ONE);
+        }
     }
     void drawRipple(const Sprite& sprite, const Scene& scene) const {
         const auto& ripple = sprite.ripple;
@@ -457,13 +616,19 @@ struct SceneRenderer::Impl {
         glDepthMask(GL_FALSE);
         const auto& sky = programs.sky;
         sky.shader.bind();
+        const bool panorama = scene.sky.panorama && scene.sky.panorama->id();
+        texture(sky.panorama, panorama ? scene.sky.panorama->id() : 0);
+        glBindSampler(0, panorama ? panoramaSampler.id() : 0);
+        glUniform1i(sky.hasPanorama, panorama);
         color(sky.topColor, scene.sky.top);
         color(sky.bottomColor, scene.sky.bottom);
         glUniform1f(sky.time, scene.time);
         glUniform1f(sky.nightBlend, scene.sky.nightBlend);
         const Vec3 sunDirection = normalize(scene.light.direction);
         glUniform3f(sky.sunDir, sunDirection.x, sunDirection.y, sunDirection.z);
-        glUniform1f(sky.aspect, static_cast<float>(renderSize.width) / renderSize.height);
+        glUniform1f(sky.aspect, skyProjectionAspect > 0 ? skyProjectionAspect
+                                                        : static_cast<float>(renderSize.width) / renderSize.height);
+        glUniform4f(sky.viewBounds, skyViewBounds.left, skyViewBounds.bottom, skyViewBounds.right, skyViewBounds.top);
         glUniform2f(sky.rasterSize, static_cast<float>(renderSize.width), static_cast<float>(renderSize.height));
         glUniform1f(sky.cloudCoverage, std::clamp(scene.sky.cloudCoverage, 0.0f, 1.0f));
         const Vec3 forward = normalize(scene.camera.target - scene.camera.position);
@@ -481,7 +646,277 @@ struct SceneRenderer::Impl {
         glUniform2f(sky.sunRadii, radius * std::clamp(.38f + scene.sky.sunCore * .015f, .38f, .54f),
                     radius * std::clamp(.60f + scene.sky.sunHaze * .05f, .62f, .76f));
         quad.draw();
+        glBindSampler(0, 0);
         glDepthMask(GL_TRUE);
+    }
+    bool reflectionBoxVisible(const Mat4& model, Vec3 halfExtent) const {
+        const auto& world = model.values;
+        const auto& plane = reflectionClipPlane;
+        const float signedDistance = plane[0] * world[12] + plane[1] * world[13] + plane[2] * world[14] + plane[3];
+        const float planeRadius =
+            std::abs(plane[0] * world[0] + plane[1] * world[1] + plane[2] * world[2]) * halfExtent.x +
+            std::abs(plane[0] * world[4] + plane[1] * world[5] + plane[2] * world[6]) * halfExtent.y +
+            std::abs(plane[0] * world[8] + plane[1] * world[9] + plane[2] * world[10]) * halfExtent.z;
+        if (signedDistance + planeRadius < 0) {
+            return false;
+        }
+        const auto& clip = multiply(viewProjection, model).values;
+        for (int axis = 0; axis < 3; ++axis) {
+            for (float sign : {-1.0f, 1.0f}) {
+                const float distance = clip[15] + sign * clip[12 + axis];
+                const float radius = std::abs(clip[3] + sign * clip[axis]) * halfExtent.x +
+                                     std::abs(clip[7] + sign * clip[4 + axis]) * halfExtent.y +
+                                     std::abs(clip[11] + sign * clip[8 + axis]) * halfExtent.z;
+                if (distance + radius < 0) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+    bool reflectionVisible(const Quad& surface) const {
+        return surface.opacity > 0 && reflectionBoxVisible(surface.model, {.5f, .5f, 0});
+    }
+    bool reflectionVisible(const Cube& object) const { return reflectionBoxVisible(object.model, {.5f, .5f, .5f}); }
+    bool reflectionVisible(const Sprite& object) const { return reflectionBoxVisible(object.model, {.6f, .6f, .6f}); }
+    bool reflectionVisible(const ModelInstance&) const {
+        return true; // Imported models may extend beyond a unit box; never truncate props with guessed bounds.
+    }
+    void drawReflectionWorld(const Scene& world, const Scene& camera) const {
+        for (const auto& object : world.objects) {
+            std::visit(
+                [&](const auto& item) {
+                    if (reflectionVisible(item)) {
+                        draw(item, camera);
+                    }
+                },
+                object);
+        }
+    }
+    void renderReflectionWorld(const Scene& world, const Scene& camera) const {
+        // Only opaque quads/cubes contribute to this depth prepass. Sprites and
+        // imported props keep their normal alpha behavior over the captured sky.
+        const auto& depth = programs.plain;
+        depth.shader.bind();
+        snap(depth);
+        glUniform1i(depth.receivesShadow, false);
+        glEnable(GL_CLIP_DISTANCE0);
+        glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+        for (const auto& object : world.objects) {
+            std::visit(
+                [&](const auto& item) {
+                    using T = std::decay_t<decltype(item)>;
+                    if constexpr (std::is_same_v<T, Quad> || std::is_same_v<T, Cube>) {
+                        if constexpr (std::is_same_v<T, Quad>) {
+                            if (item.opacity < 1) {
+                                return;
+                            }
+                        }
+                        if (!reflectionVisible(item)) {
+                            return;
+                        }
+                        matrix(depth.mvp, multiply(viewProjection, item.model));
+                        matrix(depth.model, item.model);
+                        if constexpr (std::is_same_v<T, Quad>) {
+                            quad.draw();
+                        } else {
+                            cube.draw();
+                        }
+                    }
+                },
+                object);
+        }
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        glDisable(GL_CLIP_DISTANCE0);
+        glDepthFunc(GL_LEQUAL);
+        glDepthRange(1, 1);
+        background(camera);
+        glDepthRange(0, 1);
+        glEnable(GL_CLIP_DISTANCE0);
+        drawReflectionWorld(world, camera);
+        glDisable(GL_CLIP_DISTANCE0);
+        glDepthFunc(GL_LESS);
+    }
+    void captureReflections(const Scene& scene) {
+        reflectionsReady = false;
+        // With a supplied sky, distant panes sample that bitmap directly. Only
+        // local planar views render world geometry; no six-face sky/world bake.
+        if (!settings.worldReflectionMapSize || (scene.sky.panorama && scene.sky.panorama->id())) {
+            return;
+        }
+        const bool hasGlass = std::any_of(scene.objects.begin(), scene.objects.end(), [](const auto& object) {
+            const auto* surface = std::get_if<Quad>(&object);
+            return surface && surface->texture && surface->opacity > 0 && surface->windowMaterial.worldReflections &&
+                   (surface->skyscraperWindows || (surface->buildingSurface && surface->materialTextures.glass));
+        });
+        if (!hasGlass) {
+            return;
+        }
+        if (!reflectionMap) {
+            reflectionMap = std::make_unique<ReflectionMap>(settings.worldReflectionMapSize);
+        }
+        // The six cameras share the current sun shadow. Capture only the world:
+        // no screen-space lens, fog, console snapping, menu or additive effects.
+        Scene probe;
+        probe.camera = scene.camera;
+        probe.light = scene.light;
+        probe.sky = scene.sky;
+        probe.time = scene.time;
+        probe.camera.position = scene.reflectionProbePosition.value_or(scene.camera.position);
+        probe.camera.verticalFov = 90;
+        probe.camera.nearPlane = .1f;
+        const auto savedMode = mode;
+        const auto savedSize = renderSize;
+        const auto savedProjection = viewProjection;
+        mode = RenderMode::Normal;
+        renderSize = {reflectionMap->faceSize(), reflectionMap->faceSize()};
+        capturingReflections = true;
+        glActiveTexture(GL_TEXTURE6);
+        glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
+        glBindSampler(6, 0);
+        glActiveTexture(GL_TEXTURE0);
+        constexpr Vec3 directions[] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+        constexpr Vec3 up[] = {{0, -1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}, {0, -1, 0}, {0, -1, 0}};
+        for (int face = 0; face < 6; ++face) {
+            const auto origin = probe.camera.position;
+            probe.camera.target = {origin.x + directions[face].x, origin.y + directions[face].y,
+                                   origin.z + directions[face].z};
+            probe.camera.up = up[face];
+            viewProjection = probe.camera.viewProjection(1);
+            reflectionMap->bindFace(face);
+            glClearColor(scene.sky.bottom.r, scene.sky.bottom.g, scene.sky.bottom.b, 1);
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            renderReflectionWorld(scene, probe);
+        }
+        reflectionMap->generateMipmaps();
+        mode = savedMode;
+        renderSize = savedSize;
+        viewProjection = savedProjection;
+        capturingReflections = false;
+        reflectionsReady = true;
+    }
+    void capturePlanarReflections(const Scene& scene) {
+        planarCaptures.clear();
+        if (!settings.worldReflectionMapSize || !settings.planarReflectionSize || !settings.maxPlanarReflections) {
+            return;
+        }
+        for (const auto& object : scene.objects) {
+            const auto* surface = std::get_if<Quad>(&object);
+            if (!surface || !reflectiveFacade(*surface)) {
+                continue;
+            }
+            const auto normal = normalize(surface->normal);
+            const float offset = dot(normal, center(*surface));
+            if (dot(normal, scene.camera.position) - offset <= .05f) {
+                continue; // The facade must face the viewer.
+            }
+            const float distance = facadeDistance(*surface, scene.camera.position);
+            if (distance > settings.planarReflectionDistance) {
+                continue;
+            }
+            const auto bounds = facadeBounds(*surface, viewProjection);
+            if (!bounds) {
+                continue;
+            }
+            const float score = (bounds->right - bounds->left) * (bounds->top - bounds->bottom) *
+                                (1 - std::clamp(surface->haze, 0.0f, 1.0f)) *
+                                (1 - .6f * distance / settings.planarReflectionDistance);
+            auto samePlane = std::find_if(planarCaptures.begin(), planarCaptures.end(), [&](const auto& plane) {
+                return dot(normal, plane.normal) > .9999f && std::abs(offset - plane.offset) < .01f;
+            });
+            if (samePlane != planarCaptures.end()) {
+                samePlane->score += score;
+                samePlane->bounds.left = std::min(samePlane->bounds.left, bounds->left);
+                samePlane->bounds.bottom = std::min(samePlane->bounds.bottom, bounds->bottom);
+                samePlane->bounds.right = std::max(samePlane->bounds.right, bounds->right);
+                samePlane->bounds.top = std::max(samePlane->bounds.top, bounds->top);
+            } else {
+                planarCaptures.push_back({normal, offset, *bounds, score, {}});
+            }
+        }
+        std::stable_sort(planarCaptures.begin(), planarCaptures.end(),
+                         [](const auto& a, const auto& b) { return a.score > b.score; });
+        const auto count = std::min(planarCaptures.size(), static_cast<std::size_t>(settings.maxPlanarReflections));
+        // Competing planes fade out before losing their capture slot, avoiding
+        // an abrupt change when similarly visible facades exchange priority.
+        const float cutoff = count < planarCaptures.size() ? planarCaptures[count].score : 0;
+        planarCaptures.resize(count);
+        if (cutoff > 0) {
+            for (auto& capture : planarCaptures) {
+                capture.strength = smoothTransition(cutoff, cutoff * 1.5f, capture.score);
+            }
+        }
+        if (planarCaptures.empty()) {
+            return;
+        }
+        const auto savedMode = mode;
+        const auto savedSize = renderSize;
+        const auto savedProjection = viewProjection;
+        const float aspect = static_cast<float>(savedSize.width) / savedSize.height;
+        const float density =
+            static_cast<float>(settings.planarReflectionSize) / std::max(savedSize.width, savedSize.height);
+        mode = RenderMode::Normal;
+        capturingReflections = true;
+        glActiveTexture(GL_TEXTURE6);
+        glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
+        glActiveTexture(GL_TEXTURE7);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glBindSampler(7, 0);
+        glActiveTexture(GL_TEXTURE0);
+        Scene reflected;
+        reflected.light = scene.light;
+        reflected.sky = scene.sky;
+        reflected.time = scene.time;
+        for (std::size_t index = 0; index < planarCaptures.size(); ++index) {
+            auto& capture = planarCaptures[index];
+            // Mirroring reverses handedness. lookAt's right-handed basis flips
+            // screen X, so reflect the visible facade rectangle before cropping.
+            skyViewBounds = {-capture.bounds.right, capture.bounds.bottom, -capture.bounds.left, capture.bounds.top};
+            skyProjectionAspect = aspect;
+            const float width = skyViewBounds.right - skyViewBounds.left;
+            const float height = skyViewBounds.top - skyViewBounds.bottom;
+            renderSize = {std::max(1, static_cast<int>(std::ceil(width * .5f * savedSize.width * density))),
+                          std::max(1, static_cast<int>(std::ceil(height * .5f * savedSize.height * density)))};
+            // Small viewport changes during motion must not reallocate six
+            // framebuffer textures on every frame. Keep resolution in buckets.
+            renderSize.width = (renderSize.width + 31) / 32 * 32;
+            renderSize.height = (renderSize.height + 31) / 32 * 32;
+            if (index >= planarTargets.size()) {
+                planarTargets.push_back(nullptr);
+            }
+            if (!planarTargets[index] || planarTargets[index]->size().width != renderSize.width ||
+                planarTargets[index]->size().height != renderSize.height) {
+                planarTargets[index] = std::make_unique<RenderTarget>(renderSize, RenderTarget::Kind::Reflection);
+            }
+            capture.target = planarTargets[index].get();
+            reflected.camera = scene.camera;
+            reflected.camera.position = mirrorPoint(scene.camera.position, capture.normal, capture.offset);
+            reflected.camera.target = mirrorPoint(scene.camera.target, capture.normal, capture.offset);
+            reflected.camera.up = mirrorPoint(scene.camera.up, capture.normal, 0);
+            reflected.camera.nearPlane = .1f;
+            Mat4 crop = identity();
+            crop.values[0] = 2 / width;
+            crop.values[5] = 2 / height;
+            crop.values[12] = (capture.bounds.left + capture.bounds.right) / width;
+            crop.values[13] = -(capture.bounds.top + capture.bounds.bottom) / height;
+            // Sampling and rendering must use this same mirrored, cropped
+            // projection so objects stay attached to their correct facade positions.
+            viewProjection = multiply(crop, reflected.camera.viewProjection(aspect));
+            capture.viewProjection = viewProjection;
+            reflectionClipPlane = {capture.normal.x, capture.normal.y, capture.normal.z, -capture.offset - .02f};
+            capture.target->bind();
+            glClearColor(scene.sky.bottom.r, scene.sky.bottom.g, scene.sky.bottom.b, 1);
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            renderReflectionWorld(scene, reflected);
+            capture.target->generateMipmaps();
+        }
+        mode = savedMode;
+        renderSize = savedSize;
+        viewProjection = savedProjection;
+        reflectionClipPlane = {0, 0, 0, 1};
+        skyViewBounds = {-1, -1, 1, 1};
+        skyProjectionAspect = 0;
+        capturingReflections = false;
     }
     void menu(const MenuOverlay& overlay, Size drawable) const {
         if (!overlay.visible) {
@@ -493,16 +928,16 @@ struct SceneRenderer::Impl {
         program.shader.bind();
         const float fit = std::min(static_cast<float>(drawable.width) / renderSize.width,
                                    static_cast<float>(drawable.height) / renderSize.height);
-        matrix(program.mvp, scale({renderSize.width * fit / drawable.width * 2,
-                                   renderSize.height * fit / drawable.height * 2, 1}));
+        matrix(program.mvp,
+               scale({renderSize.width * fit / drawable.width * 2, renderSize.height * fit / drawable.height * 2, 1}));
         glUniform1f(program.time, overlay.time);
         glUniform1i(program.selection, overlay.selection);
         quad.draw();
         glDepthMask(GL_TRUE);
         glEnable(GL_DEPTH_TEST);
     }
-    template <class Program> void present(Size drawable, const Program& p, unsigned int source,
-                                         float lensStrength) const {
+    template <class Program>
+    void present(Size drawable, const Program& p, unsigned int source, float lensStrength) const {
         glBindSampler(0, 0);
         RenderTarget::bindDefault(drawable);
         glClearColor(0, 0, 0, 1);
@@ -525,9 +960,8 @@ struct SceneRenderer::Impl {
         if (drawable.width <= 0 || drawable.height <= 0) {
             return;
         }
-        const float lensStrength = !std::isfinite(scene.camera.fisheyeStrength)
-                                       ? 0.0f
-                                       : std::clamp(scene.camera.fisheyeStrength, 0.0f, 0.25f);
+        const float lensStrength =
+            !std::isfinite(scene.camera.fisheyeStrength) ? 0.0f : std::clamp(scene.camera.fisheyeStrength, 0.0f, 0.25f);
         const bool cameraPass = mode == RenderMode::Normal && lensStrength > 0;
         if (cameraPass && (!cameraTarget || cameraTarget->size().width != drawable.width ||
                            cameraTarget->size().height != drawable.height)) {
@@ -541,6 +975,8 @@ struct SceneRenderer::Impl {
         glDisable(GL_CULL_FACE);
         glDisable(GL_STENCIL_TEST);
         glDisable(GL_FRAMEBUFFER_SRGB);
+        glDisable(GL_CLIP_DISTANCE0);
+        glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
         if (mode != RenderMode::Normal) {
             // Console dithering is deterministic GLSL, independent of the driver.
             glDisable(GL_DITHER);
@@ -563,6 +999,15 @@ struct SceneRenderer::Impl {
         glBindSampler(3, 0);
         glBindSampler(4, 0);
         glBindSampler(5, 0);
+        glBindSampler(6, 0);
+        glBindSampler(7, 0);
+        glBindSampler(8, 0);
+        glActiveTexture(GL_TEXTURE8);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glActiveTexture(GL_TEXTURE7);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glActiveTexture(GL_TEXTURE6);
+        glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, 0);
         glActiveTexture(GL_TEXTURE0);
@@ -580,8 +1025,12 @@ struct SceneRenderer::Impl {
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
+        captureReflections(scene);
+        capturePlanarReflections(scene);
+
         if (psx()) {
             retro.bind();
+            glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
         } else if (cameraPass) {
             cameraTarget->bind();
         } else {
@@ -594,7 +1043,8 @@ struct SceneRenderer::Impl {
             std::visit([&](const auto& item) { draw(item, scene); }, command);
         }
         glDepthMask(GL_FALSE);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+        // Additive world effects preserve the visible objects' dither mask.
+        glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE, GL_ZERO, GL_ONE);
         for (const auto& command : scene.objects) {
             if (const auto* sprite = std::get_if<Sprite>(&command)) {
                 drawRipple(*sprite, scene);
@@ -622,6 +1072,16 @@ struct SceneRenderer::Impl {
         glBindSampler(3, 0);
         glBindSampler(4, 0);
         glBindSampler(5, 0);
+        glBindSampler(6, 0);
+        glBindSampler(7, 0);
+        glBindSampler(8, 0);
+        glActiveTexture(GL_TEXTURE8);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glActiveTexture(GL_TEXTURE7);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glActiveTexture(GL_TEXTURE6);
+        glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
+        glActiveTexture(GL_TEXTURE0);
         glUseProgram(0);
     }
 };

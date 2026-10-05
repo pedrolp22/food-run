@@ -27,6 +27,7 @@ WorldScene::WorldScene(const GameAssets& assets)
     scene_.camera.fisheyeStrength = kCameraFisheyeStrength;
     scene_.light.direction = {-0.7f, 1.4f, -0.9f};
     scene_.light.shadow.center = {0, 4, -32};
+    scene_.sky.panorama = &assets_.texture(TextureId::Skybox);
     scene_.objects.reserve(1000);
     scene_.effects.reserve(144);
 }

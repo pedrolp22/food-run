@@ -18,6 +18,8 @@ uniform vec3 uCameraPosition;
 uniform float uTanHalfFov;
 uniform vec3 uSunColor;
 uniform vec2 uSunRadii;
+uniform vec4 uViewBounds = vec4(-1.0, -1.0, 1.0, 1.0);
+uniform bool uHasPanorama;
 
 // Continuous cloud fields inherit resolution and color precision from the
 // selected rendering mode, without a second pixel grid or palette pass.
@@ -130,7 +132,7 @@ float cloudDensity(vec3 p, float footprint, float threshold) {
 }
 
 vec3 viewRay(vec2 uv) {
-    vec2 plane = (uv * 2.0 - 1.0) * vec2(uAspect, 1.0) * uTanHalfFov;
+    vec2 plane = mix(uViewBounds.xy, uViewBounds.zw, uv) * vec2(uAspect, 1.0) * uTanHalfFov;
     return normalize(uCameraForward + uCameraRight * plane.x + uCameraUp * plane.y);
 }
 
@@ -217,17 +219,23 @@ vec4 cloudVolume(vec3 ray, vec3 nextX, vec3 nextY, float altitude, float thickne
 }
 
 void main() {
+    // Retain the five palette steps for day/night in either sky path.
+    float night = floor(clamp(uNightBlend, 0.0, 1.0) * 4.0 + 0.5) / 4.0;
     // Use the actual render target: smooth at full resolution, naturally
     // pixel-sized on the PSX raster. This also filters distant noise at
     // the true pixel footprint rather than an artificially enlarged grid.
     vec3 ray = viewRay(vUv);
+    if (uHasPanorama) {
+        vec3 color = samplePanorama(ray);
+        FragColor = vec4(panoramaNight(color, night), 1.0);
+        return; // No noise fields, cloud ray marches or sky texture generation.
+    }
     vec3 nextX = viewRay(vUv + vec2(1.0 / uRasterSize.x, 0.0));
     vec3 nextY = viewRay(vUv + vec2(0.0, 1.0 / uRasterSize.y));
     vec3 coordinates = skyCoordinates(ray);
 
     // The fade is intentionally reduced to five palette steps so it reads as
     // a mid-90s color-cycle, never as a modern smooth cross-fade.
-    float night = floor(clamp(uNightBlend, 0.0, 1.0) * 4.0 + 0.5) / 4.0;
     vec3 dayTop = uTopColor;
     vec3 dayMiddle = vec3(0.47, 0.70, 0.89);
     vec3 dayHaze = uBottomColor;

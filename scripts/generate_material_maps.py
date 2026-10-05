@@ -2,13 +2,14 @@
 
 Run with Python 3 and Pillow. The checked-in PNGs are runtime assets; Python is
 not a build dependency. R=occlusion, G=roughness multiplier, B=metallic multiplier,
-A=reflectivity multiplier. Street maps use a material factor of one. Facades also
+A=reflectivity multiplier. Streets use roughness/reflectivity factors of one and
+zero metallic. Road and sidewalk relief also emits inspectable height maps. Facades
 emit an R-channel glass mask and use factors of one for all mapped properties.
 """
 
 import argparse
 from collections import deque
-from math import sqrt
+from math import isfinite, sqrt
 from pathlib import Path
 
 from PIL import Image
@@ -99,9 +100,13 @@ def surface_pixel(rgb, profile):
         yellow = r > 0.4 and g > 0.2 and r > b * 1.5 and g > b * 1.3
         if white or yellow:
             # Thin, weathered road paint is smoother than the surrounding asphalt.
-            return (1, 0.40 + 0.16 * (1 - light), 1, 0.90 + 0.10 * light), 0.05
+            return (1, 0.40 + 0.16 * (1 - light), 1, 0.90 + 0.10 * light), 0.10 + 0.014 * (light - 0.5)
         grain = smoothstep(0.08, 0.20, light)
-        return (0.92 + 0.08 * grain, 0.97 - 0.27 * grain, 1, 0.40 + 0.46 * grain), 0.025 + 0.09 * grain
+        # The dominant tar/blue-black/gray palette falls below the old grain
+        # threshold. Keep pits and raised aggregate distinct even in dark texels;
+        # the paint's brightness must not become a towering ridge in the relief.
+        relief = 0.025 + 0.24 * sqrt(smoothstep(0.0, 0.22, light))
+        return (0.92 + 0.08 * grain, 0.97 - 0.27 * grain, 1, 0.40 + 0.46 * grain), relief
     if profile == "concrete":
         grain = smoothstep(0.62, 0.77, light)
         dirt = 1 - smoothstep(0.18, 0.43, light)
@@ -109,7 +114,10 @@ def surface_pixel(rgb, profile):
         roughness = roughness * (1 - dirt) + 0.99 * dirt
         reflection = (0.48 + 0.20 * light) * (1 - grain) + 0.92 * grain
         reflection = reflection * (1 - dirt) + 0.30 * dirt
-        return (1 - 0.16 * dirt, roughness, 1, reflection), 0.10 + 0.07 * grain - 0.06 * dirt
+        # Dark diagonal slab joints are recessed; brighter stone grains stand
+        # above the cement. Retain intermediate cement variation, too.
+        relief = 0.13 + 0.12 * grain - 0.13 * dirt + 0.04 * (light - 0.5)
+        return (1 - 0.16 * dirt, roughness, 1, reflection), relief
     if profile == "masonry":
         saturation = max(r, g, b) - min(r, g, b)
         mortar = (1 - smoothstep(0.08, 0.22, saturation)) * smoothstep(0.55, 0.85, light)
@@ -125,7 +133,7 @@ def surface_pixel(rgb, profile):
     return (0.94 + 0.06 * light, 1 - strength * light, 1, 0.60 + 0.40 * light), 0
 
 
-def build(source, destination, profile, normal=False, max_dimension=None, repeat=True, seed=0):
+def build(source, destination, profile, normal=False, max_dimension=None, repeat=True, seed=0, normal_strength=None):
     image = Image.open(source).convert("RGBA").convert("RGB")
     if max_dimension:
         image.thumbnail((max_dimension, max_dimension), Image.Resampling.BOX)
@@ -144,6 +152,7 @@ def build(source, destination, profile, normal=False, max_dimension=None, repeat
     output.putdata(surface)
     output.save(destination, compress_level=9)
     if normal:
+        strength = normal_strength if normal_strength is not None else (3.0 if profile in ("road", "concrete") else 1.5)
         normals = []
         def height_at(x, y):
             if repeat:
@@ -157,12 +166,16 @@ def build(source, destination, profile, normal=False, max_dimension=None, repeat
                 bottom = height_at(x, y + 1)
                 # Source images are flipped vertically by the game loader;
                 # tangent +Y must therefore oppose image-down, as on the color map.
-                nx, ny, nz = (left - right) * 1.5, (bottom - top) * 1.5, 1.0
+                nx, ny, nz = (left - right) * strength, (bottom - top) * strength, 1.0
                 magnitude = sqrt(nx * nx + ny * ny + nz * nz)
                 normals.append(tuple(encode(component / magnitude * 0.5 + 0.5) for component in (nx, ny, nz)))
         output = Image.new("RGB", image.size)
         output.putdata(normals)
         output.save(destination.with_name(destination.name.replace("_surface", "_normal")), compress_level=9)
+        if profile in ("road", "concrete"):
+            output = Image.new("L", image.size)
+            output.putdata([encode(value / 0.32) for value in heights])
+            output.save(destination.with_name(destination.name.replace("_surface", "_height")), compress_level=9)
     if profile == "skyscraper":
         output = Image.new("L", image.size)
         output.putdata(glass)
@@ -176,22 +189,26 @@ def main():
     parser.add_argument("--profile", choices=["road", "concrete", "masonry", "roof", "skyscraper", "wood", "metal", "coated"])
     parser.add_argument("--output-dir", type=Path, help="Override the catalog's map destinations.")
     parser.add_argument("--seed", type=int, default=0, help="Deterministic facade wear/pane variation (default: 0).")
+    parser.add_argument("--normal-strength", type=float, help="Override relief strength (streets: 3.0, other surfaces: 1.5).")
     args = parser.parse_args()
+    if args.normal_strength is not None and (not isfinite(args.normal_strength) or args.normal_strength < 0):
+        parser.error("--normal-strength must be finite and nonnegative")
     if args.texture:
         if not args.profile:
             parser.error("--texture requires --profile")
         prop = args.profile in ("wood", "metal", "coated")
         build(args.texture, (args.output_dir or ROOT / "materials") / (args.texture.stem + "_surface.png"), args.profile,
               normal=not prop, max_dimension=256 if prop else None,
-              repeat=args.profile != "skyscraper", seed=args.seed)
+              repeat=args.profile != "skyscraper", seed=args.seed, normal_strength=args.normal_strength)
         return
     if args.profile:
         parser.error("--profile requires --texture")
     for filename, profile in [("road", "road"), ("sidewalk", "concrete"),
                               ("wall_brick", "masonry"), ("building_top", "roof")]:
-        build(ROOT / (filename + ".png"), (args.output_dir or ROOT / "materials") / (filename + "_surface.png"), profile, normal=True)
+        build(ROOT / (filename + ".png"), (args.output_dir or ROOT / "materials") / (filename + "_surface.png"), profile,
+              normal=True, normal_strength=args.normal_strength)
     build(ROOT / "skyscraper.png", (args.output_dir or ROOT / "materials") / "skyscraper_surface.png", "skyscraper",
-          normal=True, repeat=False, seed=args.seed)
+          normal=True, repeat=False, seed=args.seed, normal_strength=args.normal_strength)
     for model, filename, profile in [
         ("bench", "Material.001_baseColor", "wood"),
         ("bench", "Material.002_baseColor", "metal"),

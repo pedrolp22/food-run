@@ -7,8 +7,8 @@
 namespace engine::graphics::detail {
 inline const std::string litSource = std::string(shaders::fog_glsl) + std::string(shaders::lighting_glsl);
 inline const std::string litTextureSource = litSource + std::string(shaders::texture_filter_glsl);
-inline const std::string materialTextureSource = litTextureSource + std::string(shaders::material_glsl) +
-                                                 std::string(shaders::material_textures_glsl);
+inline const std::string materialTextureSource =
+    litTextureSource + std::string(shaders::material_glsl) + std::string(shaders::material_textures_glsl);
 struct MaterialMapUniforms {
     int properties;
     int normal;
@@ -36,6 +36,7 @@ struct PlainProgram {
     ShaderProgram shader;
     int mvp;
     int model;
+    int reflectionClipPlane;
     int lightViewProj;
     int snap;
     int snapStrength;
@@ -52,13 +53,13 @@ struct PlainProgram {
     int ditheredShadowDarkness;
     PlainProgram()
         : shader(shaders::plain_vert, shaders::plain_frag, "plain", litSource, shaders::vertex_snap_glsl),
-          mvp(shader.uniform("uMvp")), model(shader.uniform("uModel")), lightViewProj(shader.uniform("uLightViewProj")),
+          mvp(shader.uniform("uMvp")), model(shader.uniform("uModel")),
+          reflectionClipPlane(shader.uniform("uReflectionClipPlane")), lightViewProj(shader.uniform("uLightViewProj")),
           snap(shader.uniform("uSnap")), snapStrength(shader.uniform("uSnapStrength")),
-          fogRange(shader.uniform("uFogRange")), fogColor(shader.uniform("uFogColor")),
-          color(shader.uniform("uColor")), alpha(shader.uniform("uAlpha")),
-          light(shader.uniform("uLight")), ambientLight(shader.uniform("uAmbientLight")),
-          receivesShadow(shader.uniform("uReceivesShadow")), shadowMap(shader.uniform("uShadowMap")),
-          shadowDitherStrength(shader.uniform("uShadowDitherStrength")),
+          fogRange(shader.uniform("uFogRange")), fogColor(shader.uniform("uFogColor")), color(shader.uniform("uColor")),
+          alpha(shader.uniform("uAlpha")), light(shader.uniform("uLight")),
+          ambientLight(shader.uniform("uAmbientLight")), receivesShadow(shader.uniform("uReceivesShadow")),
+          shadowMap(shader.uniform("uShadowMap")), shadowDitherStrength(shader.uniform("uShadowDitherStrength")),
           ditheredShadows(shader.uniform("uDitheredShadows")),
           ditheredShadowDarkness(shader.uniform("uDitheredShadowDarkness")) {}
 };
@@ -67,6 +68,7 @@ struct SpriteProgram {
     ShaderProgram shader;
     int mvp;
     int model;
+    int reflectionClipPlane;
     int extruded;
     int outlinePixels;
     int sunDir;
@@ -82,14 +84,13 @@ struct SpriteProgram {
     int affine;
     SpriteProgram()
         : shader(shaders::sprite_vert, shaders::sprite_frag, "sprite",
-                 std::string(shaders::fog_glsl) + std::string(shaders::texture_filter_glsl),
-                 shaders::vertex_snap_glsl),
-          mvp(shader.uniform("uMvp")), model(shader.uniform("uModel")), extruded(shader.uniform("uExtruded")),
+                 std::string(shaders::fog_glsl) + std::string(shaders::texture_filter_glsl), shaders::vertex_snap_glsl),
+          mvp(shader.uniform("uMvp")), model(shader.uniform("uModel")),
+          reflectionClipPlane(shader.uniform("uReflectionClipPlane")), extruded(shader.uniform("uExtruded")),
           outlinePixels(shader.uniform("uOutlinePixels")), sunDir(shader.uniform("uSunDir")),
           snap(shader.uniform("uSnap")), snapStrength(shader.uniform("uSnapStrength")),
           fogRange(shader.uniform("uFogRange")), fogColor(shader.uniform("uFogColor")),
-          texture(shader.uniform("uTexture")),
-          time(shader.uniform("uTime")), spawnTime(shader.uniform("uSpawnTime")),
+          texture(shader.uniform("uTexture")), time(shader.uniform("uTime")), spawnTime(shader.uniform("uSpawnTime")),
           rippleColor(shader.uniform("uRippleColor")), aspect(shader.uniform("uAspect")),
           affine(shader.uniform("uAffine")) {}
 };
@@ -110,8 +111,7 @@ struct RippleProgram {
     int burstProgress;
     RippleProgram()
         : shader(shaders::ripple_vert, shaders::ripple_frag, "ripple", shaders::fog_glsl, shaders::vertex_snap_glsl),
-          mvp(shader.uniform("uMvp")), snap(shader.uniform("uSnap")),
-          snapStrength(shader.uniform("uSnapStrength")),
+          mvp(shader.uniform("uMvp")), snap(shader.uniform("uSnap")), snapStrength(shader.uniform("uSnapStrength")),
           fogRange(shader.uniform("uFogRange")), distanceField(shader.uniform("uDistanceField")),
           color(shader.uniform("uColor")), radius(shader.uniform("uRadius")), phase(shader.uniform("uPhase")),
           width(shader.uniform("uWidth")), opacity(shader.uniform("uOpacity")), burst(shader.uniform("uBurst")),
@@ -120,6 +120,8 @@ struct RippleProgram {
 
 struct SkyProgram {
     ShaderProgram shader;
+    int panorama;
+    int hasPanorama;
     int topColor;
     int bottomColor;
     int time;
@@ -127,6 +129,7 @@ struct SkyProgram {
     int sunDir;
     int aspect;
     int rasterSize;
+    int viewBounds;
     int cloudCoverage;
     int cameraForward;
     int cameraRight;
@@ -136,14 +139,16 @@ struct SkyProgram {
     int sunColor;
     int sunRadii;
     SkyProgram()
-        : shader(shaders::sky_vert, shaders::sky_frag, "sky"),
+        : shader(shaders::sky_vert, shaders::sky_frag, "sky", shaders::sky_panorama_glsl),
+          panorama(shader.uniform("uPanorama")), hasPanorama(shader.uniform("uHasPanorama")),
           topColor(shader.uniform("uTopColor")), bottomColor(shader.uniform("uBottomColor")),
-          time(shader.uniform("uTime")), nightBlend(shader.uniform("uNightBlend")),
-          sunDir(shader.uniform("uSunDir")), aspect(shader.uniform("uAspect")), rasterSize(shader.uniform("uRasterSize")),
-          cloudCoverage(shader.uniform("uCloudCoverage")), cameraForward(shader.uniform("uCameraForward")),
-          cameraRight(shader.uniform("uCameraRight")), cameraUp(shader.uniform("uCameraUp")),
-          cameraPosition(shader.uniform("uCameraPosition")), tanHalfFov(shader.uniform("uTanHalfFov")),
-          sunColor(shader.uniform("uSunColor")), sunRadii(shader.uniform("uSunRadii")) {}
+          time(shader.uniform("uTime")), nightBlend(shader.uniform("uNightBlend")), sunDir(shader.uniform("uSunDir")),
+          aspect(shader.uniform("uAspect")), rasterSize(shader.uniform("uRasterSize")),
+          viewBounds(shader.uniform("uViewBounds")), cloudCoverage(shader.uniform("uCloudCoverage")),
+          cameraForward(shader.uniform("uCameraForward")), cameraRight(shader.uniform("uCameraRight")),
+          cameraUp(shader.uniform("uCameraUp")), cameraPosition(shader.uniform("uCameraPosition")),
+          tanHalfFov(shader.uniform("uTanHalfFov")), sunColor(shader.uniform("uSunColor")),
+          sunRadii(shader.uniform("uSunRadii")) {}
 };
 
 struct MenuProgram {
@@ -160,6 +165,7 @@ struct RoadProgram {
     ShaderProgram shader;
     int mvp;
     int model;
+    int reflectionClipPlane;
     int lightViewProj;
     int texScale;
     int texOffset;
@@ -187,11 +193,11 @@ struct RoadProgram {
     int ditheredShadowDarkness;
     RoadProgram()
         : shader(shaders::road_vert, shaders::road_frag, "road", litTextureSource, shaders::vertex_snap_glsl),
-          mvp(shader.uniform("uMvp")), model(shader.uniform("uModel")), lightViewProj(shader.uniform("uLightViewProj")),
-          texScale(shader.uniform("uTexScale")), texOffset(shader.uniform("uTexOffset")),
-          snap(shader.uniform("uSnap")), snapStrength(shader.uniform("uSnapStrength")),
-          fogRange(shader.uniform("uFogRange")), fogColor(shader.uniform("uFogColor")),
-          texture(shader.uniform("uTexture")),
+          mvp(shader.uniform("uMvp")), model(shader.uniform("uModel")),
+          reflectionClipPlane(shader.uniform("uReflectionClipPlane")), lightViewProj(shader.uniform("uLightViewProj")),
+          texScale(shader.uniform("uTexScale")), texOffset(shader.uniform("uTexOffset")), snap(shader.uniform("uSnap")),
+          snapStrength(shader.uniform("uSnapStrength")), fogRange(shader.uniform("uFogRange")),
+          fogColor(shader.uniform("uFogColor")), texture(shader.uniform("uTexture")),
           textureRepeat(shader.uniform("uTextureRepeat")), maxTextureLod(shader.uniform("uMaxTextureLod")),
           psxMinification(shader.uniform("uPsxMinification")), psxLodBias(shader.uniform("uPsxLodBias")),
           lod(shader.uniform("uLod")), light(shader.uniform("uLight")), ambientLight(shader.uniform("uAmbientLight")),
@@ -207,6 +213,7 @@ struct SkyscraperProgram {
     ShaderProgram shader;
     int mvp;
     int model;
+    int reflectionClipPlane;
     int lightViewProj;
     int texScale;
     int texOffset;
@@ -243,34 +250,56 @@ struct SkyscraperProgram {
     int glassMap;
     int hasGlassMap;
     int maxGlassLod;
+    int worldReflection;
+    int hasWorldReflection;
+    int worldReflectionMaxLod;
+    int planarReflection;
+    int hasPlanarReflection;
+    int planarReflectionViewProjection;
+    int planarReflectionMaxLod;
+    int planarReflectionStrength;
+    int windowReflectance;
+    int windowBackingTint;
+    int panorama;
+    int hasSkyPanorama;
+    int skyPanoramaNight;
     int haze;
     int hazeColor;
     MaterialMapUniforms maps;
     SkyscraperProgram()
-        : shader(shaders::skyscraper_vert, shaders::skyscraper_frag, "skyscraper", materialTextureSource,
-                 shaders::vertex_snap_glsl),
+        : shader(shaders::skyscraper_vert, shaders::skyscraper_frag, "skyscraper",
+                 materialTextureSource + std::string(shaders::sky_panorama_glsl), shaders::vertex_snap_glsl),
           mvp(shader.uniform("uMvp")), model(shader.uniform("uModel")),
-          lightViewProj(shader.uniform("uLightViewProj")), texScale(shader.uniform("uTexScale")),
-          texOffset(shader.uniform("uTexOffset")), snap(shader.uniform("uSnap")),
-          snapStrength(shader.uniform("uSnapStrength")),
-          fogRange(shader.uniform("uFogRange")), fogColor(shader.uniform("uFogColor")),
-          texture(shader.uniform("uTexture")), textureRepeat(shader.uniform("uTextureRepeat")),
-          maxTextureLod(shader.uniform("uMaxTextureLod")),
+          reflectionClipPlane(shader.uniform("uReflectionClipPlane")), lightViewProj(shader.uniform("uLightViewProj")),
+          texScale(shader.uniform("uTexScale")), texOffset(shader.uniform("uTexOffset")), snap(shader.uniform("uSnap")),
+          snapStrength(shader.uniform("uSnapStrength")), fogRange(shader.uniform("uFogRange")),
+          fogColor(shader.uniform("uFogColor")), texture(shader.uniform("uTexture")),
+          textureRepeat(shader.uniform("uTextureRepeat")), maxTextureLod(shader.uniform("uMaxTextureLod")),
           psxMinification(shader.uniform("uPsxMinification")), psxLodBias(shader.uniform("uPsxLodBias")),
           lod(shader.uniform("uLod")), ambientLight(shader.uniform("uAmbientLight")), alpha(shader.uniform("uAlpha")),
           affine(shader.uniform("uAffine")), receivesShadow(shader.uniform("uReceivesShadow")),
           color(shader.uniform("uColor")), shadowMap(shader.uniform("uShadowMap")),
           shadowDitherStrength(shader.uniform("uShadowDitherStrength")),
           ditheredShadows(shader.uniform("uDitheredShadows")),
-          ditheredShadowDarkness(shader.uniform("uDitheredShadowDarkness")),
-          faceNormal(shader.uniform("uFaceNormal")), sunDir(shader.uniform("uSunDir")),
-          cameraPosition(shader.uniform("uCameraPosition")), skyColor(shader.uniform("uSkyColor")),
-          sunColor(shader.uniform("uSunColor")), surfaceRoughness(shader.uniform("uSurfaceRoughness")),
-          surfaceMetallic(shader.uniform("uSurfaceMetallic")), surfaceReflectivity(shader.uniform("uSurfaceReflectivity")),
+          ditheredShadowDarkness(shader.uniform("uDitheredShadowDarkness")), faceNormal(shader.uniform("uFaceNormal")),
+          sunDir(shader.uniform("uSunDir")), cameraPosition(shader.uniform("uCameraPosition")),
+          skyColor(shader.uniform("uSkyColor")), sunColor(shader.uniform("uSunColor")),
+          surfaceRoughness(shader.uniform("uSurfaceRoughness")), surfaceMetallic(shader.uniform("uSurfaceMetallic")),
+          surfaceReflectivity(shader.uniform("uSurfaceReflectivity")),
           windowRoughness(shader.uniform("uWindowRoughness")),
           windowReflectivity(shader.uniform("uWindowReflectivity")), hasWindows(shader.uniform("uHasWindows")),
           glassMap(shader.uniform("uGlassMap")), hasGlassMap(shader.uniform("uHasGlassMap")),
-          maxGlassLod(shader.uniform("uMaxGlassLod")),
+          maxGlassLod(shader.uniform("uMaxGlassLod")), worldReflection(shader.uniform("uWorldReflection")),
+          hasWorldReflection(shader.uniform("uHasWorldReflection")),
+          worldReflectionMaxLod(shader.uniform("uWorldReflectionMaxLod")),
+          planarReflection(shader.uniform("uPlanarReflection")),
+          hasPlanarReflection(shader.uniform("uHasPlanarReflection")),
+          planarReflectionViewProjection(shader.uniform("uPlanarReflectionViewProjection")),
+          planarReflectionMaxLod(shader.uniform("uPlanarReflectionMaxLod")),
+          planarReflectionStrength(shader.uniform("uPlanarReflectionStrength")),
+          windowReflectance(shader.uniform("uWindowReflectance")),
+          windowBackingTint(shader.uniform("uWindowBackingTint")), panorama(shader.uniform("uPanorama")),
+          hasSkyPanorama(shader.uniform("uHasSkyPanorama")), skyPanoramaNight(shader.uniform("uSkyPanoramaNight")),
           haze(shader.uniform("uHaze")), hazeColor(shader.uniform("uHazeColor")), maps(shader) {}
 };
 
@@ -278,6 +307,7 @@ struct MaterialProgram {
     ShaderProgram shader;
     int mvp;
     int model;
+    int reflectionClipPlane;
     int lightViewProj;
     int snap;
     int snapStrength;
@@ -320,34 +350,34 @@ struct MaterialProgram {
     MaterialProgram()
         : shader(shaders::material_vert, shaders::material_frag, "material", materialTextureSource,
                  shaders::vertex_snap_glsl),
-          mvp(shader.uniform("uMvp")), model(shader.uniform("uModel")), lightViewProj(shader.uniform("uLightViewProj")),
+          mvp(shader.uniform("uMvp")), model(shader.uniform("uModel")),
+          reflectionClipPlane(shader.uniform("uReflectionClipPlane")), lightViewProj(shader.uniform("uLightViewProj")),
           snap(shader.uniform("uSnap")), snapStrength(shader.uniform("uSnapStrength")),
-          fogRange(shader.uniform("uFogRange")), fogColor(shader.uniform("uFogColor")),
-          quad(shader.uniform("uQuad")),
+          fogRange(shader.uniform("uFogRange")), fogColor(shader.uniform("uFogColor")), quad(shader.uniform("uQuad")),
           faceNormal(shader.uniform("uFaceNormal")), texture(shader.uniform("uTexture")),
-          hasTexture(shader.uniform("uHasTexture")),
-          textureRepeat(shader.uniform("uTextureRepeat")), maxTextureLod(shader.uniform("uMaxTextureLod")),
-          psxMinification(shader.uniform("uPsxMinification")), psxLodBias(shader.uniform("uPsxLodBias")),
-          texScale(shader.uniform("uTexScale")),
+          hasTexture(shader.uniform("uHasTexture")), textureRepeat(shader.uniform("uTextureRepeat")),
+          maxTextureLod(shader.uniform("uMaxTextureLod")), psxMinification(shader.uniform("uPsxMinification")),
+          psxLodBias(shader.uniform("uPsxLodBias")), texScale(shader.uniform("uTexScale")),
           texOffset(shader.uniform("uTexOffset")), lod(shader.uniform("uLod")), color(shader.uniform("uColor")),
           colorIsLinear(shader.uniform("uColorIsLinear")), surfaceRoughness(shader.uniform("uSurfaceRoughness")),
-          surfaceMetallic(shader.uniform("uSurfaceMetallic")), surfaceReflectivity(shader.uniform("uSurfaceReflectivity")),
-          sunDir(shader.uniform("uSunDir")), ambient(shader.uniform("uAmbient")),
-          cameraPosition(shader.uniform("uCameraPosition")), skyColor(shader.uniform("uSkyColor")),
-          sunColor(shader.uniform("uSunColor")), hazeColor(shader.uniform("uHazeColor")),
-          vertexLighting(shader.uniform("uVertexLighting")), shadowMap(shader.uniform("uShadowMap")),
-          shadowDitherStrength(shader.uniform("uShadowDitherStrength")),
+          surfaceMetallic(shader.uniform("uSurfaceMetallic")),
+          surfaceReflectivity(shader.uniform("uSurfaceReflectivity")), sunDir(shader.uniform("uSunDir")),
+          ambient(shader.uniform("uAmbient")), cameraPosition(shader.uniform("uCameraPosition")),
+          skyColor(shader.uniform("uSkyColor")), sunColor(shader.uniform("uSunColor")),
+          hazeColor(shader.uniform("uHazeColor")), vertexLighting(shader.uniform("uVertexLighting")),
+          shadowMap(shader.uniform("uShadowMap")), shadowDitherStrength(shader.uniform("uShadowDitherStrength")),
           ditheredShadows(shader.uniform("uDitheredShadows")),
           ditheredShadowDarkness(shader.uniform("uDitheredShadowDarkness")),
-          receivesShadow(shader.uniform("uReceivesShadow")),
-          affine(shader.uniform("uAffine")), alpha(shader.uniform("uAlpha")), haze(shader.uniform("uHaze")),
-          time(shader.uniform("uTime")), heat(shader.uniform("uHeat")), maps(shader) {}
+          receivesShadow(shader.uniform("uReceivesShadow")), affine(shader.uniform("uAffine")),
+          alpha(shader.uniform("uAlpha")), haze(shader.uniform("uHaze")), time(shader.uniform("uTime")),
+          heat(shader.uniform("uHeat")), maps(shader) {}
 };
 
 struct ModelProgram {
     ShaderProgram shader;
     int mvp;
     int model;
+    int reflectionClipPlane;
     int lightViewProj;
     int snap;
     int snapStrength;
@@ -366,14 +396,15 @@ struct ModelProgram {
     int ditheredShadowDarkness;
     ModelProgram()
         : shader(shaders::model_vert, shaders::model_frag, "model", litTextureSource, shaders::vertex_snap_glsl),
-          mvp(shader.uniform("uMvp")), model(shader.uniform("uModel")), lightViewProj(shader.uniform("uLightViewProj")),
+          mvp(shader.uniform("uMvp")), model(shader.uniform("uModel")),
+          reflectionClipPlane(shader.uniform("uReflectionClipPlane")), lightViewProj(shader.uniform("uLightViewProj")),
           snap(shader.uniform("uSnap")), snapStrength(shader.uniform("uSnapStrength")),
           fogRange(shader.uniform("uFogRange")), fogColor(shader.uniform("uFogColor")),
-          texture(shader.uniform("uTexture")),
-          baseColor(shader.uniform("uBaseColor")), hasTexture(shader.uniform("uHasTexture")),
-          sunDir(shader.uniform("uSunDir")), ambient(shader.uniform("uAmbient")), affine(shader.uniform("uAffine")),
-          vertexLighting(shader.uniform("uVertexLighting")),
-          shadowMap(shader.uniform("uShadowMap")), shadowDitherStrength(shader.uniform("uShadowDitherStrength")),
+          texture(shader.uniform("uTexture")), baseColor(shader.uniform("uBaseColor")),
+          hasTexture(shader.uniform("uHasTexture")), sunDir(shader.uniform("uSunDir")),
+          ambient(shader.uniform("uAmbient")), affine(shader.uniform("uAffine")),
+          vertexLighting(shader.uniform("uVertexLighting")), shadowMap(shader.uniform("uShadowMap")),
+          shadowDitherStrength(shader.uniform("uShadowDitherStrength")),
           ditheredShadows(shader.uniform("uDitheredShadows")),
           ditheredShadowDarkness(shader.uniform("uDitheredShadowDarkness")) {}
 };
@@ -382,6 +413,7 @@ struct CubeProgram {
     ShaderProgram shader;
     int mvp;
     int model;
+    int reflectionClipPlane;
     int lightViewProj;
     int snap;
     int snapStrength;
@@ -397,12 +429,13 @@ struct CubeProgram {
     int ditheredShadowDarkness;
     CubeProgram()
         : shader(shaders::cube_vert, shaders::cube_frag, "cube", litSource, shaders::vertex_snap_glsl),
-          mvp(shader.uniform("uMvp")), model(shader.uniform("uModel")), lightViewProj(shader.uniform("uLightViewProj")),
+          mvp(shader.uniform("uMvp")), model(shader.uniform("uModel")),
+          reflectionClipPlane(shader.uniform("uReflectionClipPlane")), lightViewProj(shader.uniform("uLightViewProj")),
           snap(shader.uniform("uSnap")), snapStrength(shader.uniform("uSnapStrength")),
-          fogRange(shader.uniform("uFogRange")), fogColor(shader.uniform("uFogColor")),
-          color(shader.uniform("uColor")), sunDir(shader.uniform("uSunDir")),
-          ambient(shader.uniform("uAmbient")), vertexLighting(shader.uniform("uVertexLighting")),
-          shadowMap(shader.uniform("uShadowMap")), shadowDitherStrength(shader.uniform("uShadowDitherStrength")),
+          fogRange(shader.uniform("uFogRange")), fogColor(shader.uniform("uFogColor")), color(shader.uniform("uColor")),
+          sunDir(shader.uniform("uSunDir")), ambient(shader.uniform("uAmbient")),
+          vertexLighting(shader.uniform("uVertexLighting")), shadowMap(shader.uniform("uShadowMap")),
+          shadowDitherStrength(shader.uniform("uShadowDitherStrength")),
           ditheredShadows(shader.uniform("uDitheredShadows")),
           ditheredShadowDarkness(shader.uniform("uDitheredShadowDarkness")) {}
 };

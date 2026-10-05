@@ -45,7 +45,7 @@ if(SUBWAY_BUILD_GRAPHICS)
     subway_library(subway_graphics graphics
         src/engine/graphics/ShaderProgram.cpp src/engine/graphics/Texture.cpp src/engine/graphics/TextureSampler.cpp
         src/engine/graphics/Mesh.cpp src/engine/graphics/BuiltinMeshes.cpp src/engine/graphics/SpriteOutline.cpp
-        src/engine/graphics/RenderTarget.cpp src/engine/graphics/Model.cpp
+        src/engine/graphics/RenderTarget.cpp src/engine/graphics/ReflectionMap.cpp src/engine/graphics/Model.cpp
         src/engine/graphics/Scene.cpp src/engine/graphics/SceneRenderer.cpp)
     target_include_directories(subway_graphics PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
     target_link_libraries(subway_graphics PUBLIC subway::assets subway::math PRIVATE subway_glad subway_stb)

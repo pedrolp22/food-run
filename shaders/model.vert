@@ -17,6 +17,7 @@ noperspective out vec2 vAffineUv;
 noperspective out vec2 vVertexLight;
 
 void main() {
+    clipReflection(uModel * vec4(aPosition, 1.0));
     vDitherPosition = surfaceDitherPosition(aPosition, uModel);
     vShadowPosition = uLightViewProj * uModel * vec4(aPosition, 1.0);
     gl_Position = snapVertex(uMvp * vec4(aPosition, 1.0));

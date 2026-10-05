@@ -20,6 +20,9 @@ struct MaterialTextures {
 };
 struct WindowMaterial {
     float roughness = 0.24f; // Smooth glass by default; higher values give frosted reflections.
-    float reflectivity = 1; // Scales glass Fresnel response (4% at normal incidence), [0, 1].
+    float reflectivity = 1;  // Scales the glass Fresnel response, [0, 1].
+    bool worldReflections = true; // Planar reflections nearby; sky panorama or captured cubemap farther away.
+    float reflectance = .28f;     // Coated glass reflectance at normal incidence, [0, 1]; applies to mapped panes too.
+    float backingTint = .18f;     // Brightness of the opaque pane backing beneath reflections, [0, 1].
 };
 } // namespace engine::graphics

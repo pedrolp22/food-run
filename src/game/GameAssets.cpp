@@ -15,13 +15,18 @@ struct ModelSpec {
     const char* directory;
     float height;
 };
-constexpr std::array textures = {
-    TextureSpec{TextureId::Road, "road.png", true, true}, TextureSpec{TextureId::Skyscraper, "skyscraper.png", false, true},
-    TextureSpec{TextureId::Wall, "wall_brick.png", true, true}, TextureSpec{TextureId::Water, "water.png", false},
-    TextureSpec{TextureId::Salad, "salad.png", false},    TextureSpec{TextureId::Salmon, "salmon.png", false},
-    TextureSpec{TextureId::Soda, "soda.png", false},      TextureSpec{TextureId::Burger, "burger.png", false},
-    TextureSpec{TextureId::Fries, "fries.png", false}, TextureSpec{TextureId::Sidewalk, "sidewalk.png", true, true},
-    TextureSpec{TextureId::BuildingTop, "building_top.png", false, true}};
+constexpr std::array textures = {TextureSpec{TextureId::Road, "road.png", true, true},
+                                 TextureSpec{TextureId::Skyscraper, "skyscraper.png", false, true},
+                                 TextureSpec{TextureId::Wall, "wall_brick.png", true, true},
+                                 TextureSpec{TextureId::Water, "water.png", false},
+                                 TextureSpec{TextureId::Salad, "salad.png", false},
+                                 TextureSpec{TextureId::Salmon, "salmon.png", false},
+                                 TextureSpec{TextureId::Soda, "soda.png", false},
+                                 TextureSpec{TextureId::Burger, "burger.png", false},
+                                 TextureSpec{TextureId::Fries, "fries.png", false},
+                                 TextureSpec{TextureId::Sidewalk, "sidewalk.png", true, true},
+                                 TextureSpec{TextureId::BuildingTop, "building_top.png", false, true},
+                                 TextureSpec{TextureId::Skybox, "skybox.png", false}};
 constexpr std::array models = {
     ModelSpec{ModelId::Cone, "traffic_cone", 1.0f}, ModelSpec{ModelId::Barrier, "barrier", 0.9f},
     ModelSpec{ModelId::TrashCan, "trash_can", 0.75f}, ModelSpec{ModelId::Bench, "bench", 0.7f}};
@@ -38,17 +43,19 @@ GameAssets::GameAssets(const std::filesystem::path& root, bool mipmapped) {
     for (const auto& asset : textures) {
         const auto index = static_cast<std::size_t>(asset.id);
         const bool collectible = asset.id >= TextureId::Water && asset.id <= TextureId::Fries;
-        textures_[index] = Texture(root / asset.file, {mipmapped ? TextureFilter::Mipmapped : TextureFilter::Nearest,
-                                                       asset.repeat, true, collectible});
+        const auto filter = !mipmapped || asset.id == TextureId::Skybox ? TextureFilter::Nearest
+                            : asset.materialDetail                      ? TextureFilter::Trilinear
+                                                                        : TextureFilter::Mipmapped;
+        textures_[index] = Texture(root / asset.file, {filter, asset.repeat, true, collectible});
         if (asset.materialDetail) {
             const auto stem = std::filesystem::path(asset.file).stem().string();
-            surfaceMaps_[index] = Texture(root / "materials" / (stem + "_surface.png"),
-                                         {TextureFilter::Trilinear, asset.repeat, true});
-            normalMaps_[index] = Texture(root / "materials" / (stem + "_normal.png"),
-                                        {TextureFilter::Trilinear, asset.repeat, true});
+            surfaceMaps_[index] =
+                Texture(root / "materials" / (stem + "_surface.png"), {TextureFilter::Trilinear, asset.repeat, true});
+            normalMaps_[index] =
+                Texture(root / "materials" / (stem + "_normal.png"), {TextureFilter::Trilinear, asset.repeat, true});
             if (asset.id == TextureId::Skyscraper) {
-                glassMaps_[index] = Texture(root / "materials" / (stem + "_glass.png"),
-                                           {TextureFilter::Trilinear, asset.repeat, true});
+                glassMaps_[index] =
+                    Texture(root / "materials" / (stem + "_glass.png"), {TextureFilter::Trilinear, asset.repeat, true});
             }
         }
         if (collectible) {

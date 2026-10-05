@@ -23,6 +23,7 @@ noperspective out vec2 vVertexLight;
 
 void main() {
     vec4 worldPosition = uModel * vec4(aPosition, 1.0);
+    clipReflection(worldPosition);
     vWorldPosition = worldPosition.xyz;
     vDitherPosition = surfaceDitherPosition(aPosition, uModel);
     vShadowPosition = uLightViewProj * worldPosition;

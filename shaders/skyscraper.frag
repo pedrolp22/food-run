@@ -24,6 +24,18 @@ uniform sampler2D uGlassMap;
 uniform bool uHasGlassMap;
 uniform int uMaxGlassLod;
 uniform float uHaze;
+uniform samplerCube uWorldReflection;
+uniform bool uHasWorldReflection;
+uniform float uWorldReflectionMaxLod;
+uniform sampler2D uPlanarReflection;
+uniform bool uHasPlanarReflection;
+uniform mat4 uPlanarReflectionViewProjection;
+uniform float uPlanarReflectionMaxLod;
+uniform float uPlanarReflectionStrength;
+uniform float uWindowReflectance;
+uniform float uWindowBackingTint;
+uniform bool uHasSkyPanorama;
+uniform float uSkyPanoramaNight;
 
 void main() {
     vec2 tc = mix(vTexCoord, vAffineTexCoord, uAffine);
@@ -35,7 +47,7 @@ void main() {
     vec3 albedo = linearColor(base) * linearColor(uColor);
     // An opaque, tinted backing under a dielectric glass coat; towers do not
     // have modeled interiors. The blue pigment does not tint the sun reflection.
-    albedo *= mix(1.0, 0.5, glass);
+    albedo *= mix(1.0, uWindowBackingTint, glass);
     float roughness = mix(uSurfaceRoughness, uWindowRoughness, glass);
     float metallic = uSurfaceMetallic * (1.0 - glass);
     float reflectivity = mix(uSurfaceReflectivity, uWindowReflectivity, glass);
@@ -62,8 +74,42 @@ void main() {
     float occlusion = mix(0.82 + 0.18 * smoothstep(0.0, 0.45, vFacadeUv.y), 1.0, abs(normal.y));
     occlusion *= mappedFacade ? materialOcclusion(tc, vTexCoord)
                               : mix(materialOcclusion(tc, vTexCoord), 1.0, glass);
-    vec3 radiance = materialRadiance(albedo, normal, vWorldPosition, shade, visibility,
-                                    roughness, metallic, reflectivity, occlusion);
+    vec3 toCamera = uCameraPosition - vWorldPosition;
+    vec3 view = toCamera / max(length(toCamera), 0.00001);
+    vec3 reflection = reflect(-view, normal);
+    vec3 environment = reflectedEnvironment(reflection, normal, clamp(roughness, 0.08, 1.0));
+    vec3 worldEnvironment = environment;
+    if (uHasSkyPanorama && glass > 0.0) {
+        vec3 sky = linearColor(panoramaNight(samplePanorama(reflection), uSkyPanoramaNight));
+        // The bitmap has no ground detail. Nearby streets and actors come from
+        // the planar capture; retain the analytic ground farther away.
+        worldEnvironment = mix(environment, sky, smoothstep(-0.08, 0.04, reflection.y));
+    }
+    if (uHasWorldReflection && glass > 0.0) {
+        // The sRGB cubemap supplies decoded linear radiance to the BRDF.
+        // The geometric reflection ray stays fixed as roughness blurs the mip chain.
+        float lod = pow(clamp(roughness, 0.0, 1.0), 2.0) * uWorldReflectionMaxLod;
+        vec3 world = textureLod(uWorldReflection, reflection, lod).rgb;
+        worldEnvironment = world;
+    }
+    if (uHasPlanarReflection && glass > 0.0) {
+        // The same mirrored camera projects the capture and the actual world
+        // position on the facade; albedo tiling never stretches the reflection.
+        vec4 projected = uPlanarReflectionViewProjection * vec4(vWorldPosition, 1.0);
+        vec2 reflectionUv = projected.xy / max(projected.w, 0.00001) * 0.5 + 0.5;
+        if (projected.w > 0.0 && all(greaterThanEqual(reflectionUv, vec2(0.0))) &&
+            all(lessThanEqual(reflectionUv, vec2(1.0)))) {
+            float lod = pow(clamp(roughness, 0.0, 1.0), 2.0) * uPlanarReflectionMaxLod;
+            vec3 world = textureLod(uPlanarReflection, reflectionUv, lod).rgb;
+            worldEnvironment = mix(worldEnvironment, world, uPlanarReflectionStrength);
+        }
+    }
+    // Apply the pane mask once, after choosing the capture. Reapplying it at
+    // each stage leaves a displaced cubemap image underneath the planar one.
+    environment = mix(environment, worldEnvironment, glass);
+    vec3 radiance = materialRadianceEnvironment(albedo, normal, vWorldPosition, shade, visibility,
+                                               roughness, metallic, reflectivity, occlusion, environment,
+                                               mix(0.04, uWindowReflectance, glass));
     vec3 surface = mix(displayColor(radiance), uHazeColor, clamp(uHaze, 0.0, 1.0));
     FragColor = vec4(distanceFog(surface), uAlpha);
 }

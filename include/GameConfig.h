@@ -41,8 +41,8 @@ constexpr float kLaneStartZ = -86.0f;
 constexpr int kLaneSegmentCount = 10;
 
 constexpr bool kMipmappedTextures = false;
-constexpr int kPsxInternalWidth = 240;
-constexpr int kPsxInternalHeight = 320;
+constexpr int kPsxInternalWidth = 480;
+constexpr int kPsxInternalHeight = 640;
 constexpr float kPsxDitherStrength = 1.0f; // Color/shade transitions and shadow-edge blending; 0 disables dithering.
 constexpr bool kPsxDitheredShadows = true; // Saturn-style checkerboard transparency; H toggles it during play.
 // Ambient/sky attenuation in covered shadow pixels, [0, 1]; 0 restores the lighter shadows.

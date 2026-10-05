@@ -3,6 +3,11 @@ uniform vec3 uSnap;
 uniform float uSnapStrength = 1.0;
 uniform vec2 uFogRange = vec2(0.0);
 noperspective out float vDistanceFog;
+uniform vec4 uReflectionClipPlane = vec4(0.0, 0.0, 0.0, 1.0);
+
+void clipReflection(vec4 worldPosition) {
+    gl_ClipDistance[0] = dot(uReflectionClipPlane, worldPosition);
+}
 
 vec3 surfaceDitherPosition(vec3 position, mat4 model) {
     // Fixed-size cells in mesh space follow translations/rotations without

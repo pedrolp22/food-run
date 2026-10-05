@@ -13,6 +13,7 @@ flat out vec3 vNormal;
 flat out float vSide;
 
 void main() {
+    clipReflection(uModel * vec4(aPosition, 1.0));
     gl_Position = snapVertex(uMvp * vec4(aPosition, 1.0));
     vTexCoord = aTexCoord;
     vAffineTexCoord = aTexCoord;

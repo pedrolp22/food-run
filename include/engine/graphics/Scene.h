@@ -48,6 +48,7 @@ struct Sky {
     float sunHaze = 2.2f;
     float nightBlend = 0;
     float cloudCoverage = 0.40f; // 0: clear sky, 1: overcast; sparse noise-based cloud volumes.
+    const Texture* panorama = nullptr; // Borrowed upper-hemisphere panorama; bypasses procedural clouds when present.
 };
 struct MenuOverlay {
     bool visible = false;
@@ -125,5 +126,6 @@ struct Scene {
     float time = 0;
     std::vector<DrawCommand> objects;
     std::vector<EffectCommand> effects; // Additive, depth-tested, no depth writes or shadow casting.
+    std::optional<math::Vec3> reflectionProbePosition{}; // Empty captures the world at the camera position.
 };
 } // namespace engine::graphics

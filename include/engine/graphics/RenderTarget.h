@@ -5,7 +5,8 @@
 namespace engine::graphics {
 class RenderTarget {
   public:
-    enum class Kind { ColorDepth, Shadow };
+    // ColorDepthAlpha retains alpha for presentation masks; Reflection uses filtered, mipmapped sRGB color.
+    enum class Kind { ColorDepth, ColorDepthAlpha, Shadow, Reflection };
     RenderTarget() = default;
     RenderTarget(Size size, Kind kind, int samples = 1);
     ~RenderTarget();
@@ -16,6 +17,8 @@ class RenderTarget {
     void bind() const;
     // Resolve MSAA color for sampling/readback, leaving the resolved framebuffer bound.
     void resolve() const;
+    void generateMipmaps() const; // Finish a reflection capture before sampling its filtered mip chain.
+    int maxMipLevel() const;
     static void bindDefault(Size size);
     unsigned int texture() const { return texture_; }
     Size size() const { return size_; }

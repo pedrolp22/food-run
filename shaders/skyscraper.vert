@@ -18,6 +18,7 @@ out vec3 vWorldPosition;
 void main() {
     vDitherPosition = surfaceDitherPosition(aPosition, uModel);
     vec4 worldPosition = uModel * vec4(aPosition, 1.0);
+    clipReflection(worldPosition);
     vWorldPosition = worldPosition.xyz;
     vFacadeUv = aTexCoord;
     vShadowPosition = uLightViewProj * worldPosition;

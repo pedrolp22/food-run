@@ -41,12 +41,16 @@ vec3 transitionMask(ivec2 pixel, ivec2 size, vec3 center) {
 void main() {
     ivec2 size = textureSize(uTexture, 0);
     ivec2 pixel = clamp(ivec2(lensUv(vTexCoord) * vec2(size)), ivec2(0), size - 1);
-    vec3 rgb8 = frameRgb8(pixel, size);
+    vec4 frame = texelFetch(uTexture, pixel, 0);
+    vec3 rgb8 = floor(frame.rgb * 255.0 + 0.5);
     // Anchor dither to native, top-down framebuffer coordinates, before the
     // lens and enlargement. PS1 saturates 8-bit RGB + offset, then drops 3 bits.
     int row = (size.y - 1 - pixel.y) % 4;
     float dither = psxDither[pixel.x % 4][row];
-    vec3 mask = uDitherStrength > 0.0 ? transitionMask(pixel, size, rgb8) : vec3(0.0);
+    // Alpha is zero for visible sprite fragments and one for the 3D scene.
+    // Sample it at the same native pixel as color so lens mapping cannot shift the exemption.
+    vec3 mask = uDitherStrength > 0.0 && frame.a > 0.0
+                ? transitionMask(pixel, size, rgb8) * frame.a : vec3(0.0);
     vec3 quantized = floor(clamp(rgb8 + dither * mask * uDitherStrength, 0.0, 255.0) / 8.0) / 31.0;
     FragColor = vec4(quantized, 1.0);
 }

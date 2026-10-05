@@ -14,7 +14,7 @@ vec4 sampleSurface(sampler2D tex, vec2 uv) {
 }
 
 vec4 sampleSurfaceLod(sampler2D tex, vec2 uv, float lod) {
-    return textureLod(tex, uv, lod);
+    return lod < 0.0 ? texture(tex, uv) : textureLod(tex, uv, lod);
 }
 
 // Optional hybrid PSX minification: visible texels stay nearest sampled, while

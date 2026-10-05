@@ -31,7 +31,7 @@ void checkState() {
     GLint sampler = -1;
     glGetBooleanv(GL_DEPTH_WRITEMASK, &depthMask);
     glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &framebuffer);
-    for (GLuint unit = 0; unit <= 5; ++unit) {
+    for (GLuint unit = 0; unit <= 8; ++unit) {
         glGetIntegeri_v(GL_SAMPLER_BINDING, unit, &sampler);
         CHECK(sampler == 0);
     }
@@ -166,6 +166,91 @@ void collectibleChecks(const game::GameAssets& assets, game::WorldScene& world, 
     }
     renderer.setMode(RenderMode::Normal);
 }
+void spriteDitherChecks(const game::GameAssets& assets, Size size) {
+    using namespace engine::math;
+    RenderSettings settings;
+    settings.retroSize = {120, 160};
+    settings.shadowMapSize = 64;
+    settings.worldReflectionMapSize = 0;
+    settings.retroDitherStrength = 0;
+    SceneRenderer clean(settings);
+    settings.retroDitherStrength = 1;
+    SceneRenderer dithered(settings);
+    clean.setMode(RenderMode::Psx);
+    dithered.setMode(RenderMode::Psx);
+
+    std::array<float, 128> ramp;
+    for (std::size_t index = 0; index < ramp.size(); ++index) {
+        ramp[index] = (40.0f + index) / 255;
+    }
+    Texture gradient = Texture::fromRedChannel({128, 1}, ramp);
+    Quad backdrop;
+    backdrop.texture = &gradient;
+    backdrop.model = multiply(translation({0, 0, -1}), scale({5, 8, 1}));
+    backdrop.color = {1, 1, 1};
+    backdrop.castsShadow = backdrop.receivesShadow = false;
+    Scene scene;
+    scene.camera.position = {0, 0, 4};
+    scene.camera.target = {0, 0, 0};
+    scene.light.ambient = 1;
+    scene.time = .3f;
+    const auto frame = [&](SceneRenderer& renderer) {
+        renderer.render(scene, size);
+        checkState();
+        return capture(size);
+    };
+    game::Entity entity;
+    entity.type = game::EntityType::SlowCollectible;
+    entity.textureIndex = 1;
+    Sprite item;
+    item.texture = &gradient;
+    item.outlinePixels = 0;
+    item.model = scale({1.5f, 1.5f, .12f});
+    Quad foreground = backdrop;
+    foreground.model = multiply(translation({0, 0, .4f}), scale({.4f, 2, 1}));
+    for (float lens : {0.0f, .15f}) {
+        scene.camera.fisheyeStrength = lens;
+        scene.objects = {backdrop};
+        scene.effects.clear();
+        const auto world = frame(clean);
+        for (int kind = 0; kind < 3; ++kind) {
+            item.profile = kind ? &assets.collectibleMesh(entity) : nullptr;
+            item.texture = kind == 2 ? &assets.collectible(entity) : &gradient;
+            item.ripple.shape = kind == 2 ? &assets.collectibleOutline(entity) : nullptr;
+            scene.objects = {backdrop, item};
+            scene.effects.clear();
+            if (kind == 2) {
+                SpriteBurst burst;
+                burst.model = item.model;
+                burst.shape = item.ripple.shape;
+                burst.color = {.1f, .8f, .3f};
+                burst.progress = .2f;
+                scene.effects = {burst};
+            }
+            const auto sprite = frame(clean);
+            const auto actual = frame(dithered);
+            std::size_t spritePixels = 0, worldDitherPixels = 0;
+            for (std::size_t index = 0; index < actual.size(); index += 3) {
+                const bool changed =
+                    !std::equal(sprite.begin() + index, sprite.begin() + index + 3, world.begin() + index);
+                const bool equal =
+                    std::equal(sprite.begin() + index, sprite.begin() + index + 3, actual.begin() + index);
+                if (changed) {
+                    CHECK(equal); // Sprite artwork, silhouettes and glow never acquire the scene's pattern.
+                    ++spritePixels;
+                } else if (!equal) {
+                    ++worldDitherPixels;
+                }
+            }
+            CHECK(spritePixels > 100 && worldDitherPixels > 100); // The visible 3D ramp still dithers.
+            scene.objects = {backdrop, item, foreground};
+            const auto occluded = frame(dithered);
+            scene.objects = {backdrop, foreground, item};
+            CHECK(frame(dithered) == occluded); // Depth determines the exemption, regardless of submission order.
+        }
+    }
+}
+
 void collectionBurstChecks(game::WorldScene& world, SceneRenderer& renderer, Size size) {
     SpriteBurst preview;
     for (auto type : {game::EntityType::ScoreCollectible, game::EntityType::SlowCollectible}) {
@@ -321,8 +406,8 @@ void skyCloudChecks(Size size) {
         double rollError = 0;
         for (std::size_t pixel = 0; pixel < clear.size() / 3; ++pixel) {
             for (int channel = 0; channel < 3; ++channel) {
-                rollError += std::abs(int(rolled[pixel * 3 + channel]) -
-                                      clear[clear.size() - (pixel + 1) * 3 + channel]);
+                rollError +=
+                    std::abs(int(rolled[pixel * 3 + channel]) - clear[clear.size() - (pixel + 1) * 3 + channel]);
             }
         }
         CHECK(rollError / clear.size() < 1.5);
@@ -354,7 +439,8 @@ void skyCloudChecks(Size size) {
             std::size_t count = 0;
             for (std::size_t i = 0; i < pixels.size(); i += 3) {
                 if (std::abs(int(pixels[i]) - clear[i]) + std::abs(int(pixels[i + 1]) - clear[i + 1]) +
-                        std::abs(int(pixels[i + 2]) - clear[i + 2]) > 8) {
+                        std::abs(int(pixels[i + 2]) - clear[i + 2]) >
+                    8) {
                     ++count;
                 }
             }
@@ -401,9 +487,8 @@ void skyCloudChecks(Size size) {
             for (int y = 0; y < size.height; ++y) {
                 for (int x = 0; x < size.width; ++x) {
                     const auto index = (y * size.width + x) * 3;
-                    const bool core = moon ? pixels[index] > 180 && pixels[index] < 220 &&
-                                                 pixels[index + 1] > 165 && pixels[index + 2] > 130 &&
-                                                 pixels[index + 2] < 165
+                    const bool core = moon ? pixels[index] > 180 && pixels[index] < 220 && pixels[index + 1] > 165 &&
+                                                 pixels[index + 2] > 130 && pixels[index + 2] < 165
                                            : pixels[index] > 240 && pixels[index + 1] > 240 && pixels[index + 2] > 240;
                     if (core) {
                         xSum += x + .5;
@@ -447,9 +532,58 @@ void skyCloudChecks(Size size) {
     }
 }
 
+void skyPanoramaChecks(const game::GameAssets& assets, Size size) {
+    RenderSettings settings;
+    settings.retroSize = size;
+    SceneRenderer renderer(settings);
+    Scene scene;
+    scene.sky.panorama = &assets.texture(game::TextureId::Skybox);
+    scene.camera.position = {0, 0, 0};
+    scene.camera.target = {0, .3f, -1};
+    const auto frame = [&] {
+        renderer.render(scene, size);
+        checkState();
+        return capture(size);
+    };
+    const auto difference = [](const auto& a, const auto& b) {
+        double total = 0;
+        for (std::size_t index = 0; index < a.size(); ++index) {
+            total += std::abs(int(a[index]) - int(b[index]));
+        }
+        return total / a.size();
+    };
+    for (auto mode : {RenderMode::Normal, RenderMode::Psx}) {
+        renderer.setMode(mode);
+        scene.camera.position = {0, 0, 0};
+        scene.camera.target = {0, .3f, -1};
+        scene.sky.nightBlend = 0;
+        const auto panorama = frame();
+        scene.time += 8;
+        scene.sky.cloudCoverage = 1;
+        CHECK(frame() == panorama); // The bitmap path does not generate animated procedural clouds.
+        scene.camera.position = {20, 3, -8};
+        scene.camera.target = {20, 3.3f, -9};
+        CHECK(difference(frame(), panorama) < .1); // World direction, independent of camera translation.
+        scene.camera.target = {21, 3.3f, -8};
+        CHECK(difference(frame(), panorama) > 2); // Camera yaw samples a different part of the supplied image.
+        scene.camera.target = {20.001f, 3.3f, -7};
+        const auto seam = frame();
+        scene.camera.target.x = 19.999f;
+        CHECK(difference(frame(), seam) < 1); // Mirrored wrap has no seam or mip-level stripe.
+        scene.sky.nightBlend = 1;
+        CHECK(difference(frame(), seam) > 10);
+        scene.sky.nightBlend = 0;
+        scene.camera.target = {20, 3.3f, -9};
+        scene.sky.panorama = nullptr;
+        CHECK(difference(frame(), panorama) > 10); // Clearing the borrowed bitmap restores the procedural sky.
+        scene.sky.panorama = &assets.texture(game::TextureId::Skybox);
+    }
+}
+
 void buildingMaterialChecks(const game::GameAssets& assets, Size size) {
     using namespace engine::math;
     RenderSettings settings;
+    settings.worldReflectionMapSize = 0; // Isolate the analytic BRDF/sun checks from reflected shadow blockers.
     settings.retroSize = size;
     settings.retroPixelStep = 0; // Isolate the material from vertex movement and letterboxing.
     SceneRenderer renderer(settings);
@@ -463,6 +597,8 @@ void buildingMaterialChecks(const game::GameAssets& assets, Size size) {
     facade.normal = {0, 0, 1};
     facade.texture = &assets.texture(game::TextureId::Skyscraper);
     facade.skyscraperWindows = true;
+    facade.windowMaterial.reflectance = .04f; // Standard dielectric fixture; the game uses coated glass.
+    facade.windowMaterial.backingTint = .5f;
     facade.castsShadow = false;
     facade.affineStrength = 0;
     // A source-texel center safely inside the second column's upper blue pane.
@@ -649,7 +785,7 @@ void buildingMaterialChecks(const game::GameAssets& assets, Size size) {
 void streetMaterialChecks(const game::GameAssets& assets, game::WorldScene& world, Size size) {
     using namespace engine::math;
     const std::vector<game::Entity> obstacles = {{game::EntityType::Obstacle, 0, -4, 0, 0},
-                                               {game::EntityType::Obstacle, 2, -8, 0, 1}};
+                                                 {game::EntityType::Obstacle, 2, -8, 0, 1}};
     for (float scroll : {0.0f, 37.0f, 99.0f}) {
         const auto& scenery = world.build(0, scroll, 2, obstacles, {});
         int roads = 0, sidewalks = 0, props = 0;
@@ -724,8 +860,8 @@ void streetMaterialChecks(const game::GameAssets& assets, game::WorldScene& worl
     // A model quad isolates linear glTF factors and per-instance finish overrides.
     engine::assets::ModelData data;
     engine::assets::PrimitiveData primitive;
-    primitive.vertices = {-2, -2.5f, 0, 0, 0, 1, 0, 0, 2, -2.5f, 0, 0, 0, 1, 1, 0,
-                           2, 2.5f, 0, 0, 0, 1, 1, 1, -2, 2.5f, 0, 0, 0, 1, 0, 1};
+    primitive.vertices = {-2, -2.5f, 0, 0, 0, 1, 0, 0, 2,  -2.5f, 0, 0, 0, 1, 1, 0,
+                          2,  2.5f,  0, 0, 0, 1, 1, 1, -2, 2.5f,  0, 0, 0, 1, 0, 1};
     primitive.indices = {0, 1, 2, 0, 2, 3};
     primitive.material.baseColor = {std::pow((.5f + .055f) / 1.055f, 2.4f), 0, 0, 1};
     primitive.material.metallic = 0;
@@ -882,13 +1018,15 @@ void surfaceDetailChecks(const game::GameAssets& assets, Size size) {
         }
     }
     CHECK(glassTexels > 6000 && frameTexels > 1800);
-    CHECK(std::count(paneRoughness.begin(), paneRoughness.end(), true) > 8); // Constant blue texels have distinct finishes.
+    CHECK(std::count(paneRoughness.begin(), paneRoughness.end(), true) >
+          8); // Constant blue texels have distinct finishes.
     CHECK(!roadMaps.glass && !sidewalkMaps.glass);
     const auto& bench = assets.model(game::ModelId::Bench).primitives();
     CHECK(bench[0].material.textures().normal && bench[1].material.textures().normal);
     CHECK(bench[0].material.textures().properties && bench[1].material.packedOcclusion);
 
     RenderSettings settings;
+    settings.worldReflectionMapSize = 0; // Validate material-map effects independently of the live world capture.
     settings.retroSize = size;
     settings.shadowMapSize = 64;
     settings.retroPixelStep = 0;
@@ -927,6 +1065,8 @@ void surfaceDetailChecks(const game::GameAssets& assets, Size size) {
     panel.affineStrength = 0;
     panel.pbrSurface = true;
     panel.surfaceMaterial = {1, 0, 1};
+    panel.windowMaterial.reflectance = .04f;
+    panel.windowMaterial.backingTint = .5f;
     const auto frame = [&](const Quad& surface, float time = 0) {
         scene.objects = {surface};
         scene.time = time;
@@ -957,7 +1097,8 @@ void surfaceDetailChecks(const game::GameAssets& assets, Size size) {
         scene.light.direction = {0, 0, 1};
         update({255, 60, 255, 255, 255, 240, 255, 90});
         const auto varied = frame(panel);
-        CHECK(sample(varied, false)[1] > sample(varied, true)[1] + 25); // Same red albedo; smoother texels reflect more white sun.
+        CHECK(sample(varied, false)[1] >
+              sample(varied, true)[1] + 25); // Same red albedo; smoother texels reflect more white sun.
         CHECK(frame(panel, 19) == varied);
         scene.light.direction = {0, 0, -1};
         const auto backlit = frame(panel);
@@ -987,8 +1128,8 @@ void surfaceDetailChecks(const game::GameAssets& assets, Size size) {
         Quad unmapped = panel;
         unmapped.materialTextures = {};
         const auto clean = frame(unmapped);
-        panel.materialTextures = {.properties = &properties, .normal = &normals, .occlusion = &properties,
-                                  .packedReflectivity = true};
+        panel.materialTextures = {
+            .properties = &properties, .normal = &normals, .occlusion = &properties, .packedReflectivity = true};
         frame(panel);
         CHECK(frame(unmapped) == clean); // Map/normal/occlusion state does not leak into the next asset.
 
@@ -1002,7 +1143,7 @@ void surfaceDetailChecks(const game::GameAssets& assets, Size size) {
         const auto mappedGlass = frame(panel);
         CHECK(sample(mappedGlass, false)[1] > sample(mappedGlass, true)[1] + 25);
         CHECK(frame(panel, 19) == mappedGlass);
-        panel.windowMaterial = {1, 0};
+        panel.windowMaterial = {1, 0, true, .04f, .5f};
         CHECK(frame(panel) == mappedGlass); // Generated roughness/reflection values are authoritative for panes too.
         update({255, 100, 0, 255, 255, 100, 0, 0});
         const auto paneReflection = frame(panel);
@@ -1030,6 +1171,136 @@ void surfaceDetailChecks(const game::GameAssets& assets, Size size) {
         CHECK(sample(bareColor, false)[0] > sample(redCoat, false)[0] + 10);
         frame(panel);
         CHECK(frame(bare) == bareColor); // The glass-mask binding and finish do not leak to another facade.
+    }
+}
+
+void gameReflectionChecks(game::WorldScene& world, Size size) {
+    using namespace engine::math;
+    RenderSettings settings;
+    settings.retroSize = size;
+    settings.retroPixelStep = settings.retroAffineStrength = settings.retroDitherStrength = 0;
+    settings.shadowMapSize = 64;
+    settings.worldReflectionMapSize = 32;
+    settings.planarReflectionSize = 256;
+    SceneRenderer renderer(settings);
+    const auto& gameScene = world.build(0, 5, 2, {}, {});
+    const Quad* facade = nullptr;
+    for (const auto& object : gameScene.objects) {
+        if (const auto* surface = std::get_if<Quad>(&object);
+            surface && surface->skyscraperWindows && surface->normal.z > .9f) {
+            facade = surface;
+            break;
+        }
+    }
+    CHECK(facade);
+    // Use an actual mapped game facade, with the view centered on a pane. An
+    // off-screen cube's image must land at its geometrically mirrored position.
+    const auto& m = facade->model.values;
+    const Vec3 pane = {m[12] - m[0] * .125f, m[13] - m[5] * .375f, m[14]};
+    Scene scene;
+    scene.sky = gameScene.sky;
+    scene.sky.cloudCoverage = scene.sky.sunSize = 0;
+    scene.light = gameScene.light;
+    scene.light.ambient = 1;
+    scene.camera.position = {pane.x, pane.y, pane.z + 4};
+    scene.camera.target = pane;
+    Quad window = *facade;
+    window.haze = 0;
+    window.castsShadow = false;
+    window.surfaceMaterial.roughness = 0; // Isolate geometric placement from authored blur/normal variation.
+    window.materialTextures.normalScale = 0;
+    Cube character;
+    character.color = {0, 0, 1};
+    const auto frame = [&] {
+        renderer.render(scene, size);
+        checkState();
+        return capture(size);
+    };
+    for (auto mode : {RenderMode::Normal, RenderMode::Psx}) {
+        renderer.setMode(mode);
+        for (float motion : {-.3f, .3f}) {
+            character.color = {0, 0, 1};
+            character.model = multiply(translation({pane.x + motion, pane.y, pane.z + 7}), scale({.6f, .6f, .6f}));
+            scene.objects = {window, character};
+            const auto blue = frame();
+            std::get<Cube>(scene.objects[1]).color = {1, 0, 0};
+            const auto red = frame();
+            double xSum = 0, ySum = 0;
+            int count = 0;
+            for (int y = 0; y < size.height; ++y) {
+                for (int x = 0; x < size.width; ++x) {
+                    const auto index = (y * size.width + x) * 3;
+                    if (std::abs(int(blue[index]) - int(red[index])) > 8 ||
+                        std::abs(int(blue[index + 2]) - int(red[index + 2])) > 8) {
+                        xSum += x + .5;
+                        ySum += y + .5;
+                        ++count;
+                    }
+                }
+            }
+            CHECK(count > 20);
+            const auto projection = scene.camera.viewProjection(float(size.width) / size.height);
+            const Vec3 mirrored = {pane.x + motion, pane.y, pane.z - 7};
+            const auto clip = transformPoint(projection, mirrored);
+            const auto& p = projection.values;
+            const float w = p[3] * mirrored.x + p[7] * mirrored.y + p[11] * mirrored.z + p[15];
+            CHECK(std::abs(xSum / count - (clip.x / w * .5 + .5) * size.width) < 2);
+            CHECK(std::abs(ySum / count - (clip.y / w * .5 + .5) * size.height) < 2);
+            std::get<Quad>(scene.objects[0]).windowMaterial.worldReflections = false;
+            const auto unreflectedRed = frame();
+            std::get<Cube>(scene.objects[1]).color = character.color;
+            CHECK(frame() == unreflectedRed); // The cube is behind the view, so only a reflection can show its color.
+        }
+    }
+}
+
+void streetBumpChecks(const game::GameAssets& assets, Size size) {
+    using namespace engine::math;
+    RenderSettings settings;
+    settings.retroSize = size;
+    settings.retroPixelStep = 0;
+    settings.shadowMapSize = 64;
+    SceneRenderer renderer(settings);
+    Scene scene;
+    scene.camera.position = {0, 3, 4};
+    scene.camera.target = {0, 0, 0};
+    scene.light.direction = {2, .6f, -1};
+    scene.sky.sunSize = scene.sky.cloudCoverage = 0;
+    Quad ground;
+    ground.model = multiply(rotateX(kPi * .5f), scale({4, 7, 1}));
+    ground.worldSize = {4, 7};
+    ground.normal = {0, 1, 0};
+    ground.pbrSurface = true;
+    ground.surfaceMaterial = {1, 0, 1};
+    ground.castsShadow = false;
+    ground.affineStrength = 0;
+    const auto frame = [&] {
+        renderer.render(scene, size);
+        checkState();
+        return capture(size);
+    };
+    for (auto mode : {RenderMode::Normal, RenderMode::Psx}) {
+        renderer.setMode(mode);
+        for (auto id : {game::TextureId::Road, game::TextureId::Sidewalk}) {
+            ground.texture = &assets.texture(id);
+            ground.materialTextures = assets.materialTextures(id);
+            scene.objects = {ground};
+            const auto bumped = frame();
+            std::get<Quad>(scene.objects[0]).materialTextures.normalScale = 0;
+            const auto flat = frame();
+            int changed = 0;
+            for (std::size_t i = 0; i < flat.size(); i += 3) {
+                if (std::abs(int(bumped[i]) - int(flat[i])) > 3 ||
+                    std::abs(int(bumped[i + 1]) - int(flat[i + 1])) > 3 ||
+                    std::abs(int(bumped[i + 2]) - int(flat[i + 2])) > 3) {
+                    ++changed;
+                }
+            }
+            CHECK(changed >
+                  size.width * size.height / 100); // Real tar/grain/joint relief remains visible after sampling.
+            scene.objects = {ground};
+            CHECK(frame() == bumped); // Bump strength is restored per command; it has no history.
+        }
     }
 }
 
@@ -1093,8 +1364,7 @@ void sidewalkSamplingChecks(const game::GameAssets& assets, game::WorldScene& wo
                     const auto pixel = static_cast<std::size_t>(y * size.width + x) * 3;
                     for (int channel = 0; channel < 3; ++channel) {
                         rawChange += std::abs(int(raw[pixel + channel]) - previousRaw[pixel + channel]);
-                        filteredChange +=
-                            std::abs(int(filtered[pixel + channel]) - previousFiltered[pixel + channel]);
+                        filteredChange += std::abs(int(filtered[pixel + channel]) - previousFiltered[pixel + channel]);
                         ++samples;
                     }
                 }
@@ -1144,8 +1414,8 @@ void shadowEdgeChecks(Size size) {
     receiver.castsShadow = false;
     Quad caster;
     // The offscreen caster puts a broad shadow down the center of the receiver.
-    caster.model = engine::math::multiply(engine::math::translation({3.2f, .8f, 2}),
-                                          engine::math::scale({2.8f, 12, 1}));
+    caster.model =
+        engine::math::multiply(engine::math::translation({3.2f, .8f, 2}), engine::math::scale({2.8f, 12, 1}));
     auto frame = [&](SceneRenderer& renderer) {
         renderer.render(scene, size);
         checkState();
@@ -1183,7 +1453,7 @@ void shadowEdgeChecks(Size size) {
                 changed += !same;
             }
         }
-        CHECK(changed > 30); // The actual cast-shadow edges get the ordered blend.
+        CHECK(changed > 30);                // The actual cast-shadow edges get the ordered blend.
         CHECK(frame(dithered) == stippled); // No random/time-dependent shadow noise.
         // Follow the same material points during an integer-pixel camera pan.
         // A screen-anchored shadow pattern would flip between the two lighting colors.
@@ -1251,15 +1521,20 @@ void ditheredShadowChecks(const game::GameAssets& assets, Size size) {
     materialCube.surfaceMaterial = {.45f, 0, 1};
     engine::assets::ModelData data;
     engine::assets::PrimitiveData primitive;
-    primitive.vertices = {-6, -6, 0, 0, 0, 1, 0, 0, 6, -6, 0, 0, 0, 1, 1, 0,
-                           6, 6, 0, 0, 0, 1, 1, 1, -6, 6, 0, 0, 0, 1, 0, 1};
+    primitive.vertices = {-6, -6, 0, 0, 0, 1, 0, 0, 6,  -6, 0, 0, 0, 1, 1, 0,
+                          6,  6,  0, 0, 0, 1, 1, 1, -6, 6,  0, 0, 0, 1, 0, 1};
     primitive.indices = {0, 1, 2, 0, 2, 3};
     primitive.material.baseColor = {.74f, .67f, .55f, 1};
     data.primitives.push_back(primitive);
     Model model(data);
-    const std::vector<DrawCommand> receivers = {receiver, textured, building, material, cube, materialCube,
-                                               ModelInstance{identity(), &model},
-                                               ModelInstance{identity(), &model, true}};
+    const std::vector<DrawCommand> receivers = {receiver,
+                                                textured,
+                                                building,
+                                                material,
+                                                cube,
+                                                materialCube,
+                                                ModelInstance{identity(), &model},
+                                                ModelInstance{identity(), &model, true}};
     Quad caster;
     caster.model = multiply(translation({3.2f, .8f, 2}), scale({2.8f, 12, 1}));
     auto frame = [&](SceneRenderer& target) {
@@ -1449,10 +1724,8 @@ void lensChecks(SceneRenderer& renderer, Size size) {
         CHECK(poleCenter(curved, centerY) > poleCenter(curved, upperY) + 1); // Visible barrel curvature.
         // Check the four camera-image corners, excluding legitimate letterboxing.
         const float contentWidth = mode == RenderMode::Normal ? size.width : 240 * fit;
-        for (int y : {int((size.height - contentHeight) / 2) + 2,
-                      int((size.height + contentHeight) / 2) - 3}) {
-            for (int x : {int((size.width - contentWidth) / 2) + 2,
-                          int((size.width + contentWidth) / 2) - 3}) {
+        for (int y : {int((size.height - contentHeight) / 2) + 2, int((size.height + contentHeight) / 2) - 3}) {
+            for (int x : {int((size.width - contentWidth) / 2) + 2, int((size.width + contentWidth) / 2) - 3}) {
                 const auto index = (y * size.width + x) * 3;
                 CHECK(curved[index] + curved[index + 1] + curved[index + 2] > 40);
             }
@@ -1533,13 +1806,17 @@ void sceneChecks() {
         buildingShaderChecks(assets, world, scroll);
     }
     skyCloudChecks(window.drawableSize());
+    skyPanoramaChecks(assets, window.drawableSize());
     buildingMaterialChecks(assets, window.drawableSize());
     streetMaterialChecks(assets, world, window.drawableSize());
     surfaceDetailChecks(assets, window.drawableSize());
+    gameReflectionChecks(world, window.drawableSize());
+    streetBumpChecks(assets, window.drawableSize());
     sidewalkSamplingChecks(assets, world, window.drawableSize());
     shadowEdgeChecks(window.drawableSize());
     ditheredShadowChecks(assets, window.drawableSize());
     collectibleChecks(assets, world, renderer, window.drawableSize());
+    spriteDitherChecks(assets, window.drawableSize());
     collectionBurstChecks(world, renderer, window.drawableSize());
     subdivisionChecks(assets, window.drawableSize());
     lensChecks(renderer, window.drawableSize());

@@ -76,12 +76,13 @@ vec3 environmentReflectance(float noV, float roughness, vec3 f0) {
     return clamp(f0 * ab.x + ab.y, vec3(0.0), vec3(1.0));
 }
 
-vec3 materialRadiance(vec3 albedo, vec3 normal, vec3 worldPosition, vec2 shade, float visibility,
-                      float roughness, float metallic, float reflectivity, float occlusion) {
+vec3 materialRadianceEnvironment(vec3 albedo, vec3 normal, vec3 worldPosition, vec2 shade, float visibility,
+                                 float roughness, float metallic, float reflectivity, float occlusion,
+                                 vec3 environment, float dielectricReflectance) {
     roughness = clamp(roughness, 0.08, 1.0);
     metallic = clamp(metallic, 0.0, 1.0);
     reflectivity = clamp(reflectivity, 0.0, 1.0);
-    vec3 f0 = mix(vec3(0.04), albedo, metallic);
+    vec3 f0 = mix(vec3(clamp(dielectricReflectance, 0.0, 1.0)), albedo, metallic);
     vec3 toCamera = uCameraPosition - worldPosition;
     vec3 view = toCamera / max(length(toCamera), 0.00001);
     vec3 light = normalize(uSunDir);
@@ -106,10 +107,26 @@ vec3 materialRadiance(vec3 albedo, vec3 normal, vec3 worldPosition, vec2 shade, 
     vec3 diffuse = (vec3(1.0) - fresnel) * (1.0 - metallic) * albedo / PI;
     vec3 direct = (diffuse + specular) * linearColor(uSunColor) * PI * shade.y * visibility;
 
-    vec3 reflection = reflect(-view, normal);
     vec3 envFresnel = environmentReflectance(noV, roughness, f0) * reflectivity;
     vec3 indirect = (vec3(1.0) - envFresnel) * (1.0 - metallic) * albedo * diffuseEnvironment(normal);
-    indirect += reflectedEnvironment(reflection, normal, roughness) * envFresnel;
+    indirect += environment * envFresnel;
     indirect *= clamp(shade.x, 0.0, 1.0) * 2.0 * occlusion * ditheredShadowAmbient(visibility, noL);
     return direct + indirect;
+}
+
+vec3 materialRadianceEnvironment(vec3 albedo, vec3 normal, vec3 worldPosition, vec2 shade, float visibility,
+                                 float roughness, float metallic, float reflectivity, float occlusion,
+                                 vec3 environment) {
+    return materialRadianceEnvironment(albedo, normal, worldPosition, shade, visibility, roughness,
+                                       metallic, reflectivity, occlusion, environment, 0.04);
+}
+
+vec3 materialRadiance(vec3 albedo, vec3 normal, vec3 worldPosition, vec2 shade, float visibility,
+                      float roughness, float metallic, float reflectivity, float occlusion) {
+    vec3 toCamera = uCameraPosition - worldPosition;
+    vec3 view = toCamera / max(length(toCamera), 0.00001);
+    vec3 reflection = reflect(-view, normal);
+    return materialRadianceEnvironment(albedo, normal, worldPosition, shade, visibility,
+                                       roughness, metallic, reflectivity, occlusion,
+                                       reflectedEnvironment(reflection, normal, clamp(roughness, 0.08, 1.0)));
 }

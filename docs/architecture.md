@@ -85,6 +85,11 @@ the finish directly; their metallic factor is zero.
 For textured models without authored metallic/roughness maps, the game catalog uses adjacent `*_surface.png`
 companions if present. `scripts/generate_material_maps.py` builds these numerical maps from the unchanged source palettes;
 Pillow is only needed to regenerate them. Surface-map generation is deterministic and has no animated noise.
+Road relief separates black tar pits, dark aggregate and thin paint; sidewalk relief recesses slab joints and raises
+stone grains. Their `*_height.png` files expose the generator's intermediate relief for inspection; lighting uses the
+matching tangent-space normal maps. The default street normal strength is 3.0; override it with `--normal-strength`,
+or adjust `MaterialTextures::normalScale` at runtime. Street relief wraps at both texture borders, and the green normal
+channel accounts for the loader's vertical image flip.
 
 Skyscrapers also load `skyscraper_glass.png`: its linear R channel marks the glass coat (1) and masonry frames (0).
 `MaterialTextures::glass` exposes that mask to facade commands. With both a glass mask and a property map, every texel's
@@ -102,7 +107,8 @@ at the original image size, with clamped border normals for a complete, untiled 
 pane/wear variation; `--output-dir` redirects generated maps for inspection. Recipes live in the script and the resulting
 PNGs can also be edited directly; reloading the game's assets picks up those edits without a shader rebuild.
 
-Normal mode filters data maps with trilinear mipmaps. PSX keeps nearest texels and continuously blends adjacent mip
+Normal mode filters both material albedo and data maps with trilinear mipmaps, using each pixel's UV derivatives
+rather than one rounded mip level per road segment or facade. PSX keeps nearest texels and continuously blends adjacent mip
 levels, measuring the footprint from perspective-correct UV derivatives even when samples use affine UVs. This preserves
 nearby pixel detail and reduces distant aggregate/normal glints without changing the color texture's sampling policy.
 The normal basis is reconstructed from UV/world-position derivatives; constant UVs safely use the geometric normal.
@@ -116,9 +122,11 @@ Set `Quad::buildingSurface` for PBR-like facade and roof shading. `surfaceMateri
 dielectric; metallic surfaces use the texture color for their specular reflection and lose their diffuse component.
 For facade commands without an authored glass mask, `Quad::skyscraperWindows` identifies blue glass texels in the color
 texture. Those panes use scalar `windowMaterial.roughness` (default 0.24) and `windowMaterial.reflectivity` (default 1);
-gray frames retain the surface material. With paired glass/property maps, `windowMaterial` is superseded by the texel's
-mapped finish. Glass is represented by a dielectric coat over an opaque, darker backing, with 4% reflectance at normal
-incidence before the reflectivity multiplier. Higher roughness gives a wider, softer lobe and blurred environment response;
+gray frames retain the surface material. With paired glass/property maps, the texel's mapped roughness and reflectivity
+replace those scalar values. `WindowMaterial::reflectance` and `backingTint` apply to both mapped and unmapped panes.
+Glass is represented by a dielectric coat over an opaque backing. Coated glass defaults to 28% reflectance at normal
+incidence and a backing brightness of 0.18, making local reflections readable; use `reflectance = 0.04` for uncoated glass.
+Both controls are clamped to zero through one. Higher roughness gives a wider, softer lobe and blurred environment response;
 zero reflectivity disables both sun and environment specular. Buildings remain opaque without modeled interiors/refraction.
 The shared `material.glsl` shader uses GGX, height-correlated Smith visibility, Schlick Fresnel,
 and energy-weighted Lambert diffuse
@@ -129,7 +137,36 @@ actual per-fragment world position, view direction and light color, and shares s
 Disabling shadow reception does not disable directional shading. Fresnel strengthens reflections at grazing views.
 Indirect illumination and rough reflections use an analytic sky/ground environment derived from the scene's sky colors,
 with an [analytic environment BRDF fit](https://www.unrealengine.com/en-US/blog/physically-based-shading-on-mobile).
-This is an environment approximation, not a capture of nearby scene geometry. Shadowed glass retains indirect reflections.
+Nearby glass uses live planar captures of the sky, character, roads, sidewalks, buildings and props.
+The renderer mirrors the main camera across the facade plane and projects the result
+onto the actual window positions. Geometry behind the plane is clipped, preventing the hosting building from covering
+the reflected street. A cropped projection concentrates resolution on the visible facade rectangle. Coplanar facades
+share a capture; the renderer selects the most visible nearby planes and updates them every frame, including moving objects.
+Rendering and sampling use the same mirrored, cropped projection; captures are never stretched across the facade UVs
+or rendered from a different street camera. The glass mask is applied once after selecting the reflection, so filtered
+pane edges cannot show a displaced cubemap image underneath the planar one.
+With `Sky::panorama`, distant panes sample that bitmap directly, and no six-face world/sky cubemap is generated.
+Nearby planar views still capture moving world geometry. Without a panorama, distant panes fall back to a live cubemap
+captured from six 90-degree views. `Scene::reflectionProbePosition` optionally places that shared distant probe;
+by default it follows the main camera. It does not affect local planar captures or the supplied sky panorama.
+All captures reuse the current sun shadow and disable world-reflection sampling to prevent feedback. They omit UI and
+additive effects and use Normal rendering without console snapping, affine warp, PSX fog or the presentation lens.
+Reflection textures store display colors in sRGB, so mip filtering and sampling supply linear radiance to the BRDF.
+Perceptual roughness squared selects continuously filtered mip levels, preserving detail in smooth panes. The glass mask
+restricts captured specular to panes; masonry and other materials retain the analytic environment. Fresnel, reflectivity,
+occlusion and final PSX RGB555 conversion still apply. Shadowed glass retains indirect reflections.
+`RenderSettings::worldReflectionMapSize` sets the cubemap face resolution without a panorama (default 128);
+zero disables world reflections, including local captures and the bitmap reflection fallback, while retaining the sky background.
+`planarReflectionSize` sets the full-view longest-side resolution (default 512), cropped to each plane's visible area;
+zero disables planar captures while retaining the distant environment fallback.
+`maxPlanarReflections` limits the number of local captures (default 6), and `planarReflectionDistance` limits the camera's
+distance to the nearest point of a facade (default 70). `planarReflectionFadeDistance` (default 20) smoothly blends local
+captures into the distant environment between 50 and 70 units, reaching zero before the capture is dropped. Planes near
+the capture-budget cutoff also blend down before exchanging priority slots. `WindowMaterial::worldReflections = false` selects only the analytic
+environment per facade. Capture targets are cached, with resolution rounded to 32-pixel buckets to limit reallocations
+during motion. Reflection passes cull out-of-view quads, cubes and sprites while retaining imported models with unknown bounds.
+An opaque quad/cube depth prepass restricts the captured sky to uncovered pixels; other geometry keeps its normal alpha behavior.
+Additional world views trade rendering time for local detail; scenes without reflective glass skip capture.
 There are no timed bands, pane phases or hard-coded reflection shapes. The microfacet lobe widens over unresolved raster
 footprints to limit subpixel glints. Source texture sampling, PSX affine geometry, RGB555 and selective dithering still apply;
 the PBR lighting is an intentional modern part of the retro hybrid rather than original console lighting emulation.
@@ -137,7 +174,15 @@ Foundation occlusion uses whole-face height and affects only indirect light, ind
 `Quad::haze` blends a surface into the sky haze while retaining opacity and depth occlusion.
 Game skyscrapers map the complete, clamped texture once onto each of their four sides. Brick walls use a fixed world size
 for each texture tile. Buildings remain opaque as they fade into the distance.
-The sky reconstructs world-space view rays from the camera basis, vertical FOV and render-target aspect. Its continuous
+The game loads `assets/skybox.png` once and uses it through `Sky::panorama` in the main view, local reflection backgrounds
+and distant glass reflections. The supplied cloud artwork maps onto the upper dome, with elevation compressed toward
+the horizon for the downward-facing game camera. Mirrored horizontal wrapping joins its nonmatching image edges.
+Sky and glass shaders share the same mapping and sample source texels with nearest-neighbor sampling at mip level zero,
+without image smoothing or pole blending.
+This path performs texture lookups rather than cloud ray marches or offscreen sky generation. It stays fixed when the
+camera translates and follows world directions when the camera rotates. Night blend darkens the supplied artwork.
+Set `Sky::panorama = nullptr` to select the procedural sky described below.
+The procedural sky reconstructs world-space view rays from the camera basis, vertical FOV and render-target aspect. Its continuous
 dome follows yaw, pitch and roll, blending continuously into horizon haze. The dome and directionally placed stars, sun
 and moon stay fixed when the camera translates. Sun size and distance set its angular diameter, so the disc stays round
 when viewed from another bearing. At night a flat-shaded moon
@@ -160,7 +205,7 @@ Use `Sprite` for an alpha-cutout texture silhouette. Sprite transforms are provi
 to the renderer. Flat sprites retain the emissive ripple style. Supplying `Sprite::profile` draws an extruded silhouette
 with steady dark outlines, readable textured faces, and directionally shaded sides. Both passes use the same profile mesh.
 Effects use additive blending and depth testing without depth writes
-or shadow casting. General translucent sorting, glass transmission, and scene reflection captures are outside this
+or shadow casting. General translucent sorting and glass transmission are outside this
 renderer's current scope.
 
 To reuse item extrusion, load a `Texture` with `TextureOptions::retainAlpha = true`, then call `makeSpriteMesh(texture)`
@@ -253,7 +298,10 @@ Models and cubes use 8-bit vertex lighting, interpolated in screen space (Gourau
 dither offsets apply selectively to gradual color/shade transitions. A two-pixel native neighborhood measures variation and
 curvature per RGB channel: flat channels, isolated shade steps and alternating texels suppress dither. High-contrast edges
 also reject it, keeping silhouettes and window frames crisp. This selection is a screen-space style heuristic; it never
-blurs or blends neighboring colors. Dither is anchored to top-down native framebuffer pixels before lens mapping and
+blurs or blends neighboring colors. The retro target's alpha stores dither eligibility: visible sprite fragments,
+including extruded faces, outlines, ripples and collection bursts, clear it while retaining their normal color blending.
+Depth testing and alpha cutouts preserve dithering on the world behind sprites. Sprites still use RGB555 quantization.
+Dither is anchored to top-down native framebuffer pixels before lens mapping and
 enlargement, so resizing never changes its phase. OpenGL driver dithering is disabled in both console modes.
 The affine interpolation, vertex shades and signed dither pattern follow the
 [PS1 GPU specifications](https://psx-spx.consoledev.net/ps1/gpu/misc/).

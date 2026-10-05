@@ -6,7 +6,21 @@
 #include <array>
 
 namespace game {
-enum class TextureId { Road, Skyscraper, Wall, Water, Salad, Salmon, Soda, Burger, Fries, Sidewalk, BuildingTop, Count };
+enum class TextureId {
+    Road,
+    Skyscraper,
+    Wall,
+    Water,
+    Salad,
+    Salmon,
+    Soda,
+    Burger,
+    Fries,
+    Sidewalk,
+    BuildingTop,
+    Skybox,
+    Count
+};
 enum class ModelId { Cone, Barrier, TrashCan, Bench, Count };
 // The game's asset catalog; the graphics library knows no asset names or game rules.
 class GameAssets {
