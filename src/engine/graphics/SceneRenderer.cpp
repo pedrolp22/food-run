@@ -7,10 +7,13 @@
 #include "engine/graphics/SpriteOutline.h"
 #include "engine/graphics/TextureSampler.h"
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <glad/glad.h>
+#include <limits>
 #include <stdexcept>
 #include <type_traits>
+#include <unordered_map>
 #include <vector>
 
 namespace engine::graphics {
@@ -21,10 +24,12 @@ RenderSettings checkedSettings(RenderSettings settings) {
         throw std::invalid_argument("World reflection map size must be nonnegative");
     }
     if (settings.planarReflectionSize < 0 || settings.maxPlanarReflections < 0 ||
-        !std::isfinite(settings.planarReflectionDistance) || settings.planarReflectionDistance <= 0 ||
-        !std::isfinite(settings.planarReflectionFadeDistance) || settings.planarReflectionFadeDistance < 0) {
-        throw std::invalid_argument(
-            "Planar reflection size/count/fade must be nonnegative and distance must be positive");
+        settings.distantPlanarReflectionSize <= 0 || !std::isfinite(settings.distantPlanarReflectionUpdateSeconds) ||
+        settings.distantPlanarReflectionUpdateSeconds < 0 || !std::isfinite(settings.planarReflectionDistance) ||
+        settings.planarReflectionDistance <= 0 || !std::isfinite(settings.planarReflectionFadeDistance) ||
+        settings.planarReflectionFadeDistance < 0 || !std::isfinite(settings.planarReflectionBlendSeconds) ||
+        settings.planarReflectionBlendSeconds < 0) {
+        throw std::invalid_argument("Invalid planar reflection size, distance, fade or update interval");
     }
     if (!std::isfinite(settings.retroPixelStep) || settings.retroPixelStep < 0 ||
         !std::isfinite(settings.modelAffineStrength) || settings.modelAffineStrength < 0 ||
@@ -145,7 +150,186 @@ struct PlanarCapture {
     Mat4 viewProjection;
     RenderTarget* target = nullptr;
     float strength = 1;
+    std::vector<std::uint64_t> ids;
+    int history = -1;
+    std::size_t slot = 0;
+    bool selected = false;
+    float detail = 1;
+    float distance = 0;
+    float nextUpdate = 0;
+    std::uint64_t anchorGroup = 0;
+    Vec3 anchorPosition;
+    Mat4 capturedProjection;
+    Camera capturedCamera;
+    Vec2 textureScale = {1, 1};
+    float maxLod = 0;
 };
+struct ReflectionGroup {
+    Vec3 minimum = {std::numeric_limits<float>::infinity(), std::numeric_limits<float>::infinity(),
+                    std::numeric_limits<float>::infinity()};
+    Vec3 maximum = {-std::numeric_limits<float>::infinity(), -std::numeric_limits<float>::infinity(),
+                    -std::numeric_limits<float>::infinity()};
+    float distance = std::numeric_limits<float>::infinity();
+    float strength = 1;
+    float nearDepth = std::numeric_limits<float>::infinity(), farDepth = 0;
+    std::vector<const Quad*> surfaces;
+    std::vector<Vec2> silhouette;
+    bool solid = false;
+    bool occluded = false;
+};
+struct ReflectionBox {
+    Vec3 center;
+    Vec3 radius;
+    bool enabled = true;
+};
+ReflectionBox worldBox(const Mat4& model, Vec3 localCenter, Vec3 halfExtent) {
+    const auto& m = model.values;
+    return {transformPoint(model, localCenter),
+            {std::abs(m[0]) * halfExtent.x + std::abs(m[4]) * halfExtent.y + std::abs(m[8]) * halfExtent.z,
+             std::abs(m[1]) * halfExtent.x + std::abs(m[5]) * halfExtent.y + std::abs(m[9]) * halfExtent.z,
+             std::abs(m[2]) * halfExtent.x + std::abs(m[6]) * halfExtent.y + std::abs(m[10]) * halfExtent.z}};
+}
+float turn(Vec2 a, Vec2 b, Vec2 c) {
+    return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+}
+void projectGroup(ReflectionGroup& group, const Mat4& projection, float nearPlane) {
+    std::vector<Vec2> points;
+    const auto& m = projection.values;
+    for (float x : {group.minimum.x, group.maximum.x}) {
+        for (float y : {group.minimum.y, group.maximum.y}) {
+            for (float z : {group.minimum.z, group.maximum.z}) {
+                const float w = m[3] * x + m[7] * y + m[11] * z + m[15];
+                if (w <= nearPlane) {
+                    return; // Never occlude through a near-plane crossing.
+                }
+                group.nearDepth = std::min(group.nearDepth, w);
+                group.farDepth = std::max(group.farDepth, w);
+                const auto clip = transformPoint(projection, {x, y, z});
+                points.push_back({clip.x / w, clip.y / w});
+            }
+        }
+    }
+    std::sort(points.begin(), points.end(), [](auto a, auto b) { return a.x < b.x || (a.x == b.x && a.y < b.y); });
+    // The convex silhouette is stricter than a screen rectangle: retain all
+    // partially visible faces and gaps between neighboring buildings.
+    for (auto point : points) {
+        while (group.silhouette.size() >= 2 &&
+               turn(group.silhouette[group.silhouette.size() - 2], group.silhouette.back(), point) <= 0) {
+            group.silhouette.pop_back();
+        }
+        group.silhouette.push_back(point);
+    }
+    const auto lower = group.silhouette.size();
+    for (auto it = std::next(points.rbegin()); it != points.rend(); ++it) {
+        while (group.silhouette.size() > lower &&
+               turn(group.silhouette[group.silhouette.size() - 2], group.silhouette.back(), *it) <= 0) {
+            group.silhouette.pop_back();
+        }
+        group.silhouette.push_back(*it);
+    }
+    group.silhouette.pop_back();
+    if (group.silhouette.size() < 3) {
+        group.silhouette.clear();
+    }
+}
+bool groupHiddenBy(const ReflectionGroup& group, const ReflectionGroup& occluder) {
+    if (!occluder.solid || group.silhouette.empty() || occluder.silhouette.empty() ||
+        group.nearDepth <= occluder.farDepth + .02f) {
+        return false;
+    }
+    for (auto point : group.silhouette) {
+        for (std::size_t i = 0; i < occluder.silhouette.size(); ++i) {
+            if (turn(occluder.silhouette[i], occluder.silhouette[(i + 1) % occluder.silhouette.size()], point) <=
+                .00001f) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+bool solidGroup(const ReflectionGroup& group) {
+    std::array<std::vector<ScreenBounds>, 5> panels;
+    const auto extent = group.maximum - group.minimum;
+    for (const auto* surface : group.surfaces) {
+        if (!surface->buildingSurface || surface->opacity != 1 || surface->alphaCutoff > 0) {
+            return false;
+        }
+        const auto normal = normalize(surface->normal);
+        const auto position = center(*surface);
+        int face = -1;
+        float offset = 0;
+        if (std::abs(normal.x) > .9999f) {
+            face = normal.x > 0 ? 0 : 1;
+            offset = std::abs(position.x - (normal.x > 0 ? group.maximum.x : group.minimum.x));
+        } else if (std::abs(normal.z) > .9999f) {
+            face = normal.z > 0 ? 2 : 3;
+            offset = std::abs(position.z - (normal.z > 0 ? group.maximum.z : group.minimum.z));
+        } else if (normal.y > .9999f) {
+            face = 4;
+            offset = std::abs(position.y - group.maximum.y);
+        }
+        if (face < 0 || offset > .1f) {
+            return false;
+        }
+        const auto& m = surface->model.values;
+        const Vec3 x{m[0], m[1], m[2]}, y{m[4], m[5], m[6]};
+        const auto axisAligned = [&](Vec3 axis) {
+            const float length = std::sqrt(dot(axis, axis));
+            return std::abs(axis.x) + std::abs(axis.y) + std::abs(axis.z) <= length * 1.0001f;
+        };
+        if (!axisAligned(x) || !axisAligned(y) || std::abs(dot(normal, x)) > .001f ||
+            std::abs(dot(normal, y)) > .001f) {
+            return false;
+        }
+        const Vec3 radius{(std::abs(x.x) + std::abs(y.x)) * .5f, (std::abs(x.y) + std::abs(y.y)) * .5f,
+                          (std::abs(x.z) + std::abs(y.z)) * .5f};
+        const float horizontal = face < 2 ? position.z : position.x;
+        const float vertical = face == 4 ? position.z : position.y;
+        const float halfWidth = face < 2 ? radius.z : radius.x;
+        const float halfHeight = face == 4 ? radius.z : radius.y;
+        panels[face].push_back(
+            {horizontal - halfWidth, vertical - halfHeight, horizontal + halfWidth, vertical + halfHeight});
+    }
+    std::array<float, 5> area{};
+    for (std::size_t face = 0; face < panels.size(); ++face) {
+        std::vector<float> edges;
+        for (auto panel : panels[face]) {
+            edges.push_back(panel.left);
+            edges.push_back(panel.right);
+        }
+        std::sort(edges.begin(), edges.end());
+        for (std::size_t i = 1; i < edges.size(); ++i) {
+            const float middle = (edges[i - 1] + edges[i]) * .5f;
+            std::vector<std::pair<float, float>> intervals;
+            for (auto panel : panels[face]) {
+                if (panel.left <= middle && panel.right >= middle)
+                    intervals.emplace_back(panel.bottom, panel.top);
+            }
+            std::sort(intervals.begin(), intervals.end());
+            float top = -std::numeric_limits<float>::infinity(), height = 0;
+            for (auto [bottom, upper] : intervals) {
+                height += std::max(0.0f, upper - std::max(bottom, top));
+                top = std::max(top, upper);
+            }
+            area[face] += (edges[i] - edges[i - 1]) * height;
+        }
+    }
+    // Union coverage avoids counting overlapping panels twice and treating
+    // a wall with gaps as a closed occluder.
+    return area[0] >= extent.y * extent.z - .001f && area[1] >= extent.y * extent.z - .001f &&
+           area[2] >= extent.x * extent.y - .001f && area[3] >= extent.x * extent.y - .001f &&
+           area[4] >= extent.x * extent.z - .001f;
+}
+bool sameCapture(const PlanarCapture& a, const PlanarCapture& b) {
+    if (dot(a.normal, b.normal) <= .9999f) {
+        return false;
+    }
+    if (!a.ids.empty() && !b.ids.empty()) {
+        return std::any_of(a.ids.begin(), a.ids.end(),
+                           [&](auto id) { return std::find(b.ids.begin(), b.ids.end(), id) != b.ids.end(); });
+    }
+    return std::abs(a.offset - b.offset) < .01f;
+}
 Mesh subdividedQuad(int divisions) {
     std::vector<float> vertices;
     std::vector<unsigned int> indices;
@@ -181,6 +365,16 @@ struct SceneRenderer::Impl {
     std::unique_ptr<ReflectionMap> reflectionMap;
     std::vector<std::unique_ptr<RenderTarget>> planarTargets;
     std::vector<PlanarCapture> planarCaptures;
+    std::vector<PlanarCapture> planarCandidates;
+    std::unordered_map<std::uint64_t, ReflectionGroup> reflectionGroups;
+    std::vector<ReflectionBox> reflectionObjects;
+    mutable std::array<std::array<float, 4>, 6> reflectionFrustum{};
+    mutable std::vector<unsigned int> viewUniformsReady;
+    mutable std::vector<unsigned int> environmentUniformsReady;
+    std::optional<float> previousPlanarTime;
+    RenderMode planarMode = RenderMode::Normal;
+    Size planarViewSize{};
+    mutable std::array<bool, 2> cloudUniformsReady{};
     std::array<float, 4> reflectionClipPlane = {0, 0, 0, 1};
     ScreenBounds skyViewBounds = {-1, -1, 1, 1};
     float skyProjectionAspect = 0;
@@ -218,6 +412,13 @@ struct SceneRenderer::Impl {
     void cloudSky(const detail::CloudSkyUniforms& p, const Scene& scene, bool allow = true) const {
         const bool enabled = allow && scene.sky.hasTexturedClouds();
         glUniform1i(p.enabled, enabled);
+        // Every view in a frame shares these directional sky settings. Upload
+        // them once per program, rather than again for every reflected facade.
+        auto& ready = cloudUniformsReady[&p == &programs.sky.clouds ? 0 : 1];
+        if (ready) {
+            return;
+        }
+        ready = true;
         const auto palette = scene.sky.palette();
         color(p.topColor, palette.top);
         color(p.horizonColor, palette.horizon);
@@ -232,9 +433,20 @@ struct SceneRenderer::Impl {
         glUniform4f(p.stars, finiteRange(stars.density, 0, 1), radians(finiteRange(stars.sizeDegrees, .01f, .5f, .11f)),
                     finiteRange(stars.brightness, 0, 1), starFade);
         glUniform2f(p.twinkle, finiteRange(stars.twinkleSpeed, 0, 10), finiteRange(stars.twinkleStrength, 0, 1));
+        const auto& moon = scene.sky.moon;
+        const bool moonPresent = scene.sky.hasTexturedClouds() && moon.texture && moon.texture->id();
+        texture(p.moonTexture, moonPresent ? moon.texture->id() : 0, 12);
+        glBindSampler(12, moonPresent ? cloudSampler.id() : 0);
+        const Vec3 moonDirection = normalize(moon.direction);
+        glUniform3f(p.moonDirection, moonDirection.x, moonDirection.y, moonDirection.z);
+        const float moonWidth = std::tan(radians(finiteRange(moon.sizeDegrees, .1f, 30, 6.5f)) * .5f);
+        glUniform2f(p.moonSize, moonWidth, moonWidth / (moonPresent ? moon.texture->aspect() : 1));
+        const float moonFade = moonPresent ? smoothTransition(.5f, .9f, finiteRange(scene.sky.nightBlend, 0, 1)) : 0;
+        glUniform3f(p.moonLight, moonFade, finiteRange(moon.brightness, 0, 3, 1.35f),
+                    finiteRange(moon.glowStrength, 0, 1, .16f));
         for (std::size_t index = 0; index < scene.sky.texturedClouds.size(); ++index) {
             const auto& layer = scene.sky.texturedClouds[index];
-            const bool present = enabled && layer.texture && layer.texture->id();
+            const bool present = layer.texture && layer.texture->id();
             const int unit = 9 + static_cast<int>(index);
             texture(p.textures[index], present ? layer.texture->id() : 0, unit);
             glBindSampler(unit, present ? cloudSampler.id() : 0);
@@ -309,6 +521,11 @@ struct SceneRenderer::Impl {
         program.shader.bind();
         matrix(program.mvp, multiply(viewProjection, model));
         matrix(program.model, model);
+        if (std::find(viewUniformsReady.begin(), viewUniformsReady.end(), program.shader.id()) !=
+            viewUniformsReady.end()) {
+            return;
+        }
+        viewUniformsReady.push_back(program.shader.id());
         matrix(program.lightViewProj, lightProjection);
         texture(program.shadowMap, shadow.texture(), 1);
         glUniform1f(program.shadowDitherStrength, psx() ? settings.retroDitherStrength : 0);
@@ -349,6 +566,11 @@ struct SceneRenderer::Impl {
                     std::isfinite(maps.occlusionStrength) ? std::clamp(maps.occlusionStrength, 0.0f, 1.0f) : 0);
     }
     template <class Program> void materialEnvironment(const Program& p, const Scene& scene) const {
+        if (std::find(environmentUniformsReady.begin(), environmentUniformsReady.end(), p.shader.id()) !=
+            environmentUniformsReady.end()) {
+            return;
+        }
+        environmentUniformsReady.push_back(p.shader.id());
         const auto sun = normalize(scene.light.direction);
         glUniform3f(p.sunDir, sun.x, sun.y, sun.z);
         glUniform3f(p.cameraPosition, scene.camera.position.x, scene.camera.position.y, scene.camera.position.z);
@@ -501,10 +723,18 @@ struct SceneRenderer::Impl {
                 glUniform1f(p.worldReflectionMaxLod, worldReflection ? reflectionMap->maxMipLevel() : 0);
                 glActiveTexture(GL_TEXTURE0);
                 const PlanarCapture* planar = nullptr;
+                const auto group =
+                    !capturingReflections ? reflectionGroups.find(command.reflectionGroupId) : reflectionGroups.end();
+                const float distance = capturingReflections ? 0
+                                       : group != reflectionGroups.end()
+                                           ? group->second.distance
+                                           : facadeDistance(command, scene.camera.position);
                 if (!capturingReflections && command.windowMaterial.worldReflections) {
                     const float offset = dot(normal, center(command));
                     for (const auto& capture : planarCaptures) {
-                        if (dot(normal, capture.normal) > .9999f && std::abs(offset - capture.offset) < .01f) {
+                        if (distance <= settings.planarReflectionDistance &&
+                            (group == reflectionGroups.end() || !group->second.occluded) &&
+                            dot(normal, capture.normal) > .9999f && std::abs(offset - capture.offset) < .01f) {
                             planar = &capture;
                             break;
                         }
@@ -513,16 +743,18 @@ struct SceneRenderer::Impl {
                 texture(p.planarReflection, planar ? planar->target->texture() : 0, 7);
                 glBindSampler(7, 0);
                 glUniform1i(p.hasPlanarReflection, planar != nullptr);
-                float planarStrength = planar ? planar->strength : 0;
+                float planarStrength =
+                    planar ? (group != reflectionGroups.end() ? group->second.strength : planar->strength) : 0;
                 if (planar && settings.planarReflectionFadeDistance > 0) {
                     const float fadeStart =
                         std::max(0.0f, settings.planarReflectionDistance - settings.planarReflectionFadeDistance);
-                    planarStrength *= 1 - smoothTransition(fadeStart, settings.planarReflectionDistance,
-                                                           facadeDistance(command, scene.camera.position));
+                    planarStrength *= 1 - smoothTransition(fadeStart, settings.planarReflectionDistance, distance);
                 }
                 glUniform1f(p.planarReflectionStrength, planarStrength);
                 matrix(p.planarReflectionViewProjection, planar ? planar->viewProjection : identity());
-                glUniform1f(p.planarReflectionMaxLod, planar ? planar->target->maxMipLevel() : 0);
+                glUniform2f(p.planarReflectionTextureScale, planar ? planar->textureScale.x : 1,
+                            planar ? planar->textureScale.y : 1);
+                glUniform1f(p.planarReflectionMaxLod, planar ? planar->maxLod : 0);
                 glUniform1f(p.windowReflectance, std::isfinite(command.windowMaterial.reflectance)
                                                      ? std::clamp(command.windowMaterial.reflectance, 0.0f, 1.0f)
                                                      : 0);
@@ -743,48 +975,48 @@ struct SceneRenderer::Impl {
         glBindSampler(0, 0);
         glDepthMask(GL_TRUE);
     }
-    bool reflectionBoxVisible(const Mat4& model, Vec3 halfExtent) const {
-        const auto& world = model.values;
-        const auto& plane = reflectionClipPlane;
-        const float signedDistance = plane[0] * world[12] + plane[1] * world[13] + plane[2] * world[14] + plane[3];
-        const float planeRadius =
-            std::abs(plane[0] * world[0] + plane[1] * world[1] + plane[2] * world[2]) * halfExtent.x +
-            std::abs(plane[0] * world[4] + plane[1] * world[5] + plane[2] * world[6]) * halfExtent.y +
-            std::abs(plane[0] * world[8] + plane[1] * world[9] + plane[2] * world[10]) * halfExtent.z;
-        if (signedDistance + planeRadius < 0) {
-            return false;
-        }
-        const auto& clip = multiply(viewProjection, model).values;
-        for (int axis = 0; axis < 3; ++axis) {
-            for (float sign : {-1.0f, 1.0f}) {
-                const float distance = clip[15] + sign * clip[12 + axis];
-                const float radius = std::abs(clip[3] + sign * clip[axis]) * halfExtent.x +
-                                     std::abs(clip[7] + sign * clip[4 + axis]) * halfExtent.y +
-                                     std::abs(clip[11] + sign * clip[8 + axis]) * halfExtent.z;
-                if (distance + radius < 0) {
-                    return false;
-                }
-            }
-        }
-        return true;
+    bool reflectionBoundsVisible(const ReflectionBox& box) const {
+        const auto outside = [&](const auto& plane) {
+            const float distance =
+                plane[0] * box.center.x + plane[1] * box.center.y + plane[2] * box.center.z + plane[3];
+            const float radius = std::abs(plane[0]) * box.radius.x + std::abs(plane[1]) * box.radius.y +
+                                 std::abs(plane[2]) * box.radius.z;
+            return distance + radius < 0;
+        };
+        return box.enabled && !outside(reflectionClipPlane) &&
+               std::none_of(reflectionFrustum.begin(), reflectionFrustum.end(), outside);
     }
-    bool reflectionVisible(const Quad& surface) const {
-        return surface.opacity > 0 && reflectionBoxVisible(surface.model, {.5f, .5f, 0});
-    }
-    bool reflectionVisible(const Cube& object) const { return reflectionBoxVisible(object.model, {.5f, .5f, .5f}); }
-    bool reflectionVisible(const Sprite& object) const { return reflectionBoxVisible(object.model, {.6f, .6f, .6f}); }
-    bool reflectionVisible(const ModelInstance&) const {
-        return true; // Imported models may extend beyond a unit box; never truncate props with guessed bounds.
-    }
-    void drawReflectionWorld(const Scene& world, const Scene& camera) const {
-        for (const auto& object : world.objects) {
-            std::visit(
-                [&](const auto& item) {
-                    if (reflectionVisible(item)) {
-                        draw(item, camera);
+    void prepareReflectionObjects(const Scene& scene) {
+        reflectionObjects.clear();
+        reflectionObjects.reserve(scene.objects.size());
+        for (const auto& object : scene.objects) {
+            reflectionObjects.push_back(std::visit(
+                [](const auto& item) {
+                    using T = std::decay_t<decltype(item)>;
+                    if constexpr (std::is_same_v<T, ModelInstance>) {
+                        return item.model ? worldBox(item.transform, item.model->boundsCenter(),
+                                                     item.model->boundsHalfExtent())
+                                          : ReflectionBox{{}, {}, false};
+                    } else if constexpr (std::is_same_v<T, Quad>) {
+                        auto box = worldBox(item.model, {}, {.5f, .5f, 0});
+                        box.enabled = item.opacity > 0;
+                        return box;
+                    } else {
+                        return worldBox(item.model, {},
+                                        std::is_same_v<T, Cube> ? Vec3{.5f, .5f, .5f} : Vec3{.6f, .6f, .6f});
                     }
                 },
-                object);
+                object));
+        }
+    }
+    bool reflectionVisible(const Quad& surface) const {
+        return surface.opacity > 0 && reflectionBoundsVisible(worldBox(surface.model, {}, {.5f, .5f, 0}));
+    }
+    void drawReflectionWorld(const Scene& world, const Scene& camera) const {
+        for (std::size_t i = 0; i < world.objects.size(); ++i) {
+            if (reflectionBoundsVisible(reflectionObjects[i])) {
+                std::visit([&](const auto& item) { draw(item, camera); }, world.objects[i]);
+            }
         }
     }
     void drawParticles(const Scene& world, const Scene& camera) const {
@@ -818,6 +1050,26 @@ struct SceneRenderer::Impl {
         }
     }
     void renderReflectionWorld(const Scene& world, const Scene& camera) const {
+        viewUniformsReady.clear();
+        environmentUniformsReady.clear();
+        const auto& m = viewProjection.values;
+        int plane = 0;
+        for (int axis = 0; axis < 3; ++axis) {
+            for (float sign : {-1.0f, 1.0f}) {
+                reflectionFrustum[plane++] = {m[3] + sign * m[axis], m[7] + sign * m[4 + axis],
+                                              m[11] + sign * m[8 + axis], m[15] + sign * m[12 + axis]};
+            }
+        }
+        if (world.sky.hasTexturedClouds() || (world.sky.panorama && world.sky.panorama->id())) {
+            // The authored sky is cheap enough to draw directly. Avoid drawing
+            // every opaque surface twice just to reject its background pixels.
+            background(camera);
+            glEnable(GL_CLIP_DISTANCE0);
+            drawReflectionWorld(world, camera);
+            drawParticles(world, camera);
+            glDisable(GL_CLIP_DISTANCE0);
+            return;
+        }
         // Only opaque quads/cubes contribute to this depth prepass. Sprites and
         // imported props keep their normal alpha behavior over the captured sky.
         const auto& depth = programs.plain;
@@ -826,7 +1078,10 @@ struct SceneRenderer::Impl {
         glUniform1i(depth.receivesShadow, false);
         glEnable(GL_CLIP_DISTANCE0);
         glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
-        for (const auto& object : world.objects) {
+        for (std::size_t i = 0; i < world.objects.size(); ++i) {
+            if (!reflectionBoundsVisible(reflectionObjects[i])) {
+                continue;
+            }
             std::visit(
                 [&](const auto& item) {
                     using T = std::decay_t<decltype(item)>;
@@ -835,9 +1090,6 @@ struct SceneRenderer::Impl {
                             if (item.opacity < 1 || item.alphaCutoff > 0) {
                                 return;
                             }
-                        }
-                        if (!reflectionVisible(item)) {
-                            return;
                         }
                         matrix(depth.mvp, multiply(viewProjection, item.model));
                         matrix(depth.model, item.model);
@@ -848,7 +1100,7 @@ struct SceneRenderer::Impl {
                         }
                     }
                 },
-                object);
+                world.objects[i]);
         }
         glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
         glDisable(GL_CLIP_DISTANCE0);
@@ -921,11 +1173,67 @@ struct SceneRenderer::Impl {
         capturingReflections = false;
         reflectionsReady = true;
     }
+    void prepareReflectionGroups(const Scene& scene, float step, bool fresh, float time) {
+        auto previous = std::move(reflectionGroups);
+        reflectionGroups.clear();
+        reflectionGroups.reserve(previous.size());
+        for (const auto& object : scene.objects) {
+            const auto* surface = std::get_if<Quad>(&object);
+            if (!surface || !surface->reflectionGroupId || surface->opacity <= 0) {
+                continue;
+            }
+            auto& group = reflectionGroups[surface->reflectionGroupId];
+            group.surfaces.push_back(surface);
+            group.distance = std::min(group.distance, facadeDistance(*surface, scene.camera.position));
+            const auto& m = surface->model.values;
+            const Vec3 radius{(std::abs(m[0]) + std::abs(m[4])) * .5f, (std::abs(m[1]) + std::abs(m[5])) * .5f,
+                              (std::abs(m[2]) + std::abs(m[6])) * .5f};
+            const auto position = center(*surface);
+            group.minimum.x = std::min(group.minimum.x, position.x - radius.x);
+            group.minimum.y = std::min(group.minimum.y, position.y - radius.y);
+            group.minimum.z = std::min(group.minimum.z, position.z - radius.z);
+            group.maximum.x = std::max(group.maximum.x, position.x + radius.x);
+            group.maximum.y = std::max(group.maximum.y, position.y + radius.y);
+            group.maximum.z = std::max(group.maximum.z, position.z + radius.z);
+        }
+        for (auto& [id, group] : reflectionGroups) {
+            const auto old = previous.find(id);
+            group.strength = group.distance > settings.planarReflectionDistance ? 0
+                             : fresh || time == 0                               ? 1
+                             : old == previous.end()                            ? std::min(step, 1.0f)
+                                                     : std::min(old->second.strength + step, 1.0f);
+            group.solid = solidGroup(group);
+            projectGroup(group, viewProjection, scene.camera.nearPlane);
+        }
+        for (auto& [id, group] : reflectionGroups) {
+            for (const auto& [otherId, other] : reflectionGroups) {
+                if (id != otherId && groupHiddenBy(group, other)) {
+                    group.occluded = true;
+                    break;
+                }
+            }
+        }
+    }
     void capturePlanarReflections(const Scene& scene) {
-        planarCaptures.clear();
+        const float time = std::isfinite(scene.time) ? scene.time : 0;
+        const bool fresh = !previousPlanarTime || time < *previousPlanarTime || mode != planarMode ||
+                           renderSize.width != planarViewSize.width || renderSize.height != planarViewSize.height;
+        const float elapsed = fresh ? 0 : std::clamp(time - *previousPlanarTime, 0.0f, .1f);
+        previousPlanarTime = time;
+        planarMode = mode;
+        planarViewSize = renderSize;
+        if (fresh) {
+            planarCaptures.clear();
+        }
+        planarCandidates.clear();
         if (!settings.worldReflectionMapSize || !settings.planarReflectionSize || !settings.maxPlanarReflections) {
+            planarCaptures.clear();
+            reflectionGroups.clear();
             return;
         }
+        const float step =
+            settings.planarReflectionBlendSeconds > 0 ? elapsed / settings.planarReflectionBlendSeconds : 1;
+        prepareReflectionGroups(scene, step, fresh, time);
         for (const auto& object : scene.objects) {
             const auto* surface = std::get_if<Quad>(&object);
             if (!surface || !reflectiveFacade(*surface)) {
@@ -936,7 +1244,12 @@ struct SceneRenderer::Impl {
             if (dot(normal, scene.camera.position) - offset <= .05f) {
                 continue; // The facade must face the viewer.
             }
-            const float distance = facadeDistance(*surface, scene.camera.position);
+            const auto group = reflectionGroups.find(surface->reflectionGroupId);
+            if (group != reflectionGroups.end() && group->second.occluded) {
+                continue;
+            }
+            const float distance = group != reflectionGroups.end() ? group->second.distance
+                                                                   : facadeDistance(*surface, scene.camera.position);
             if (distance > settings.planarReflectionDistance) {
                 continue;
             }
@@ -945,33 +1258,94 @@ struct SceneRenderer::Impl {
                 continue;
             }
             const float score = (bounds->right - bounds->left) * (bounds->top - bounds->bottom) *
-                                (1 - std::clamp(surface->haze, 0.0f, 1.0f)) *
-                                (1 - .6f * distance / settings.planarReflectionDistance);
-            auto samePlane = std::find_if(planarCaptures.begin(), planarCaptures.end(), [&](const auto& plane) {
+                                (1 - std::clamp(surface->haze, 0.0f, 1.0f)) * (1 / (1 + distance * .07f));
+            auto samePlane = std::find_if(planarCandidates.begin(), planarCandidates.end(), [&](const auto& plane) {
                 return dot(normal, plane.normal) > .9999f && std::abs(offset - plane.offset) < .01f;
             });
-            if (samePlane != planarCaptures.end()) {
+            if (samePlane != planarCandidates.end()) {
                 samePlane->score += score;
+                samePlane->distance = std::min(samePlane->distance, distance);
                 samePlane->bounds.left = std::min(samePlane->bounds.left, bounds->left);
                 samePlane->bounds.bottom = std::min(samePlane->bounds.bottom, bounds->bottom);
                 samePlane->bounds.right = std::max(samePlane->bounds.right, bounds->right);
                 samePlane->bounds.top = std::max(samePlane->bounds.top, bounds->top);
             } else {
-                planarCaptures.push_back({normal, offset, *bounds, score, {}});
+                PlanarCapture capture;
+                capture.normal = normal;
+                capture.offset = offset;
+                capture.bounds = *bounds;
+                capture.score = score;
+                capture.distance = distance;
+                capture.anchorGroup = surface->reflectionGroupId;
+                planarCandidates.push_back(std::move(capture));
+                samePlane = std::prev(planarCandidates.end());
+            }
+            if (surface->reflectionId) {
+                samePlane->ids.push_back(surface->reflectionId);
             }
         }
-        std::stable_sort(planarCaptures.begin(), planarCaptures.end(),
+        std::vector<bool> matched(planarCaptures.size(), false);
+        for (auto& candidate : planarCandidates) {
+            for (std::size_t index = 0; index < planarCaptures.size(); ++index) {
+                if (!matched[index] && sameCapture(candidate, planarCaptures[index])) {
+                    candidate.history = static_cast<int>(index);
+                    matched[index] = true;
+                    // Hysteresis only changes detail priority. All visible
+                    // planes keep live captures, including narrow side faces.
+                    if (planarCaptures[index].selected) {
+                        candidate.score *= 1.2f;
+                    }
+                    break;
+                }
+            }
+        }
+        std::stable_sort(planarCandidates.begin(), planarCandidates.end(),
                          [](const auto& a, const auto& b) { return a.score > b.score; });
-        const auto count = std::min(planarCaptures.size(), static_cast<std::size_t>(settings.maxPlanarReflections));
-        // Competing planes fade out before losing their capture slot, avoiding
-        // an abrupt change when similarly visible facades exchange priority.
-        const float cutoff = count < planarCaptures.size() ? planarCaptures[count].score : 0;
-        planarCaptures.resize(count);
-        if (cutoff > 0) {
-            for (auto& capture : planarCaptures) {
-                capture.strength = smoothTransition(cutoff, cutoff * 1.5f, capture.score);
+        const auto count = std::min(planarCandidates.size(), static_cast<std::size_t>(settings.maxPlanarReflections));
+        for (std::size_t index = 0; index < planarCandidates.size(); ++index) {
+            auto& candidate = planarCandidates[index];
+            candidate.selected = index < count;
+            const float detail = candidate.selected ? 1 : 1 - smoothTransition(35, 90, candidate.distance);
+            if (candidate.history >= 0) {
+                const auto& previous = planarCaptures[candidate.history];
+                candidate.slot = previous.slot;
+                candidate.strength = std::min(previous.strength + step, 1.0f);
+                candidate.detail = previous.detail + std::clamp(detail - previous.detail, -step, step);
+                candidate.target = previous.target;
+                candidate.textureScale = previous.textureScale;
+                candidate.maxLod = previous.maxLod;
+                candidate.nextUpdate = previous.nextUpdate;
+                if (previous.anchorGroup && reflectionGroups.contains(previous.anchorGroup)) {
+                    candidate.anchorGroup = previous.anchorGroup;
+                } else if (previous.anchorGroup != candidate.anchorGroup) {
+                    candidate.target = nullptr; // A shared plane's old anchor left the scene.
+                }
+                candidate.anchorPosition = previous.anchorPosition;
+                candidate.capturedProjection = previous.capturedProjection;
+                candidate.capturedCamera = previous.capturedCamera;
+            } else {
+                // Stateless reusable scenes remain immediately renderable. The
+                // game supplies IDs and time so newly arriving facades ease in.
+                candidate.strength = fresh || time == 0 ? 1 : std::min(step, 1.0f);
+                candidate.detail = detail;
             }
         }
+        // Reuse allocations by facade identity, independently of ranking.
+        // The detail budget never removes a visible face's reflection.
+        std::vector<bool> usedSlots(std::max(planarTargets.size(), planarCandidates.size()), false);
+        for (const auto& capture : planarCandidates) {
+            if (capture.history >= 0) {
+                usedSlots[capture.slot] = true;
+            }
+        }
+        for (auto& capture : planarCandidates) {
+            if (capture.history < 0) {
+                capture.slot =
+                    static_cast<std::size_t>(std::find(usedSlots.begin(), usedSlots.end(), false) - usedSlots.begin());
+                usedSlots[capture.slot] = true;
+            }
+        }
+        planarCaptures.swap(planarCandidates);
         if (planarCaptures.empty()) {
             return;
         }
@@ -979,8 +1353,6 @@ struct SceneRenderer::Impl {
         const auto savedSize = renderSize;
         const auto savedProjection = viewProjection;
         const float aspect = static_cast<float>(savedSize.width) / savedSize.height;
-        const float density =
-            static_cast<float>(settings.planarReflectionSize) / std::max(savedSize.width, savedSize.height);
         mode = RenderMode::Normal;
         capturingReflections = true;
         glActiveTexture(GL_TEXTURE6);
@@ -993,8 +1365,52 @@ struct SceneRenderer::Impl {
         reflected.light = scene.light;
         reflected.sky = scene.sky;
         reflected.time = scene.time;
-        for (std::size_t index = 0; index < planarCaptures.size(); ++index) {
-            auto& capture = planarCaptures[index];
+        for (auto& capture : planarCaptures) {
+            const auto anchor = reflectionGroups.find(capture.anchorGroup);
+            const Vec3 position = anchor != reflectionGroups.end()
+                                      ? Vec3{(anchor->second.minimum.x + anchor->second.maximum.x) * .5f,
+                                             (anchor->second.minimum.y + anchor->second.maximum.y) * .5f,
+                                             (anchor->second.minimum.z + anchor->second.maximum.z) * .5f}
+                                      : Vec3{capture.normal.x * capture.offset, capture.normal.y * capture.offset,
+                                             capture.normal.z * capture.offset};
+            // Cached distant views keep their image attached to scrolling
+            // geometry. New faces are captured immediately, never queued.
+            const auto cameraMotion = scene.camera.position - capture.capturedCamera.position;
+            const bool cameraChanged =
+                dot(cameraMotion, cameraMotion) > .25f ||
+                scene.camera.verticalFov != capture.capturedCamera.verticalFov ||
+                scene.camera.nearPlane != capture.capturedCamera.nearPlane ||
+                scene.camera.farPlane != capture.capturedCamera.farPlane ||
+                dot(normalize(scene.camera.target - scene.camera.position),
+                    normalize(capture.capturedCamera.target - capture.capturedCamera.position)) < .999f ||
+                dot(normalize(scene.camera.up), normalize(capture.capturedCamera.up)) < .999f;
+            const bool refresh = !capture.target || capture.selected || capture.distance < 35 || elapsed == 0 ||
+                                 time >= capture.nextUpdate || cameraChanged || !capture.anchorGroup;
+            if (!refresh) {
+                capture.viewProjection =
+                    multiply(capture.capturedProjection, translation(capture.anchorPosition - position));
+                continue;
+            }
+            capture.anchorPosition = position;
+            capture.capturedCamera = scene.camera;
+            const float interval = settings.distantPlanarReflectionUpdateSeconds;
+            const std::uint64_t id = capture.anchorGroup   ? capture.anchorGroup
+                                     : capture.ids.empty() ? capture.slot
+                                                           : capture.ids.front();
+            const auto hash = (id ^ (id >> 32)) * std::uint64_t{0x9e3779b97f4a7c15};
+            const float phase = static_cast<float>((hash >> 32) & 65535) / 65536;
+            capture.nextUpdate = interval > 0 ? (std::floor(time / interval - phase) + 1 + phase) * interval : time;
+            const float resolution = std::lerp(
+                static_cast<float>(std::min(settings.distantPlanarReflectionSize, settings.planarReflectionSize)),
+                static_cast<float>(settings.planarReflectionSize), capture.detail);
+            const float density = std::min(1.0f, resolution / std::max(savedSize.width, savedSize.height));
+            // Padding retains facade edges under subpixel motion and leaves
+            // room for glass blur without sampling outside the cropped view.
+            const float padX = 4 / (savedSize.width * density), padY = 4 / (savedSize.height * density);
+            capture.bounds.left = std::max(-1.0f, capture.bounds.left - padX);
+            capture.bounds.right = std::min(1.0f, capture.bounds.right + padX);
+            capture.bounds.bottom = std::max(-1.0f, capture.bounds.bottom - padY);
+            capture.bounds.top = std::min(1.0f, capture.bounds.top + padY);
             // Mirroring reverses handedness. lookAt's right-handed basis flips
             // screen X, so reflect the visible facade rectangle before cropping.
             skyViewBounds = {-capture.bounds.right, capture.bounds.bottom, -capture.bounds.left, capture.bounds.top};
@@ -1003,18 +1419,29 @@ struct SceneRenderer::Impl {
             const float height = skyViewBounds.top - skyViewBounds.bottom;
             renderSize = {std::max(1, static_cast<int>(std::ceil(width * .5f * savedSize.width * density))),
                           std::max(1, static_cast<int>(std::ceil(height * .5f * savedSize.height * density)))};
-            // Small viewport changes during motion must not reallocate six
-            // framebuffer textures on every frame. Keep resolution in buckets.
+            // Match the raster density while keeping persistent allocations.
+            // Targets grow in power-of-two buckets and never shrink/reorder.
             renderSize.width = (renderSize.width + 31) / 32 * 32;
             renderSize.height = (renderSize.height + 31) / 32 * 32;
-            if (index >= planarTargets.size()) {
-                planarTargets.push_back(nullptr);
+            if (capture.slot >= planarTargets.size()) {
+                planarTargets.resize(capture.slot + 1);
             }
-            if (!planarTargets[index] || planarTargets[index]->size().width != renderSize.width ||
-                planarTargets[index]->size().height != renderSize.height) {
-                planarTargets[index] = std::make_unique<RenderTarget>(renderSize, RenderTarget::Kind::Reflection);
+            auto& target = planarTargets[capture.slot];
+            if (!target || target->size().width < renderSize.width || target->size().height < renderSize.height) {
+                const Size capacitySize = {
+                    std::max(target ? target->size().width : 64,
+                             static_cast<int>(std::bit_ceil(static_cast<unsigned int>(renderSize.width)))),
+                    std::max(target ? target->size().height : 64,
+                             static_cast<int>(std::bit_ceil(static_cast<unsigned int>(renderSize.height))))};
+                target = std::make_unique<RenderTarget>(capacitySize, RenderTarget::Kind::Reflection);
             }
-            capture.target = planarTargets[index].get();
+            capture.target = target.get();
+            capture.textureScale = {static_cast<float>(renderSize.width) / target->size().width,
+                                    static_cast<float>(renderSize.height) / target->size().height};
+            // Keep blurred texel footprints inside both populated dimensions,
+            // even when a thin crop reuses a previously much larger target.
+            capture.maxLod =
+                std::bit_width(static_cast<unsigned int>(std::min(renderSize.width, renderSize.height))) - 1;
             reflected.camera = scene.camera;
             reflected.camera.position = mirrorPoint(scene.camera.position, capture.normal, capture.offset);
             reflected.camera.target = mirrorPoint(scene.camera.target, capture.normal, capture.offset);
@@ -1029,8 +1456,10 @@ struct SceneRenderer::Impl {
             // projection so objects stay attached to their correct facade positions.
             viewProjection = multiply(crop, reflected.camera.viewProjection(aspect));
             capture.viewProjection = viewProjection;
+            capture.capturedProjection = viewProjection;
             reflectionClipPlane = {capture.normal.x, capture.normal.y, capture.normal.z, -capture.offset - .02f};
             capture.target->bind();
+            glViewport(0, 0, renderSize.width, renderSize.height);
             clearSkyColor(scene);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
             renderReflectionWorld(scene, reflected);
@@ -1083,6 +1512,7 @@ struct SceneRenderer::Impl {
         glEnable(GL_BLEND);
     }
     void render(const Scene& scene, Size drawable) {
+        cloudUniformsReady = {};
         if (drawable.width <= 0 || drawable.height <= 0) {
             return;
         }
@@ -1128,7 +1558,7 @@ struct SceneRenderer::Impl {
         glBindSampler(6, 0);
         glBindSampler(7, 0);
         glBindSampler(8, 0);
-        for (GLuint unit = 9; unit <= 11; ++unit) {
+        for (GLuint unit = 9; unit <= 12; ++unit) {
             glBindSampler(unit, 0);
             glActiveTexture(GL_TEXTURE0 + unit);
             glBindTexture(GL_TEXTURE_2D, 0);
@@ -1156,6 +1586,8 @@ struct SceneRenderer::Impl {
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
+        if (settings.worldReflectionMapSize)
+            prepareReflectionObjects(scene);
         captureReflections(scene);
         capturePlanarReflections(scene);
 
@@ -1169,6 +1601,8 @@ struct SceneRenderer::Impl {
         }
         clearSkyColor(scene);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        viewUniformsReady.clear();
+        environmentUniformsReady.clear();
         background(scene);
         for (const auto& command : scene.objects) {
             std::visit([&](const auto& item) { draw(item, scene); }, command);
@@ -1207,7 +1641,7 @@ struct SceneRenderer::Impl {
         glBindSampler(6, 0);
         glBindSampler(7, 0);
         glBindSampler(8, 0);
-        for (GLuint unit = 9; unit <= 11; ++unit) {
+        for (GLuint unit = 9; unit <= 12; ++unit) {
             glBindSampler(unit, 0);
             glActiveTexture(GL_TEXTURE0 + unit);
             glBindTexture(GL_TEXTURE_2D, 0);

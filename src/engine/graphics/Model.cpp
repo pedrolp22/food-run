@@ -1,10 +1,22 @@
 #include "engine/graphics/Model.h"
+#include <algorithm>
+#include <limits>
 
 namespace engine::graphics {
 Model::Model(const std::filesystem::path& path, float targetHeight) : Model(assets::loadGltf(path, targetHeight)) {}
 Model::Model(const assets::ModelData& data) {
+    const float infinity = std::numeric_limits<float>::infinity();
+    math::Vec3 minimum{infinity, infinity, infinity}, maximum{-infinity, -infinity, -infinity};
     primitives_.reserve(data.primitives.size());
     for (const auto& source : data.primitives) {
+        for (std::size_t i = 0; i + 2 < source.vertices.size(); i += assets::kModelVertexStride) {
+            minimum.x = std::min(minimum.x, source.vertices[i]);
+            minimum.y = std::min(minimum.y, source.vertices[i + 1]);
+            minimum.z = std::min(minimum.z, source.vertices[i + 2]);
+            maximum.x = std::max(maximum.x, source.vertices[i]);
+            maximum.y = std::max(maximum.y, source.vertices[i + 1]);
+            maximum.z = std::max(maximum.z, source.vertices[i + 2]);
+        }
         Primitive primitive;
         primitive.mesh =
             Mesh(source.vertices, assets::kModelVertexStride, {{0, 3, 0}, {1, 3, 3}, {2, 2, 6}}, source.indices);
@@ -39,6 +51,11 @@ Model::Model(const assets::ModelData& data) {
             primitive.material.occlusion = Texture(source.material.occlusionTexture, {TextureFilter::Trilinear});
         }
         primitives_.push_back(std::move(primitive));
+    }
+    if (minimum.x <= maximum.x) {
+        boundsCenter_ = {(minimum.x + maximum.x) * .5f, (minimum.y + maximum.y) * .5f, (minimum.z + maximum.z) * .5f};
+        boundsHalfExtent_ = {(maximum.x - minimum.x) * .5f, (maximum.y - minimum.y) * .5f,
+                             (maximum.z - minimum.z) * .5f};
     }
 }
 } // namespace engine::graphics

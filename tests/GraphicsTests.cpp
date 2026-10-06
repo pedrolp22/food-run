@@ -17,6 +17,7 @@
 
 using namespace engine::graphics;
 void sceneryChecks(const game::GameAssets& assets, game::WorldScene& world, Size size);
+void skyCycleChecks(const game::GameAssets& assets, game::WorldScene& world, Size size);
 namespace {
 std::vector<unsigned char> capture(Size size) {
     std::vector<unsigned char> pixels(static_cast<std::size_t>(size.width) * size.height * 3);
@@ -32,7 +33,7 @@ void checkState() {
     GLint sampler = -1;
     glGetBooleanv(GL_DEPTH_WRITEMASK, &depthMask);
     glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &framebuffer);
-    for (GLuint unit = 0; unit <= 11; ++unit) {
+    for (GLuint unit = 0; unit <= 12; ++unit) {
         glGetIntegeri_v(GL_SAMPLER_BINDING, unit, &sampler);
         CHECK(sampler == 0);
     }
@@ -1529,6 +1530,8 @@ void gameReflectionChecks(const game::GameAssets& assets, game::WorldScene& worl
             }
         }
         CHECK(facade);
+        CHECK(facade->reflectionId != 0);
+        CHECK(facade->reflectionGroupId != 0);
         // Use an actual mapped game facade, with the view centered on a pane. An
         // off-screen cube's image must land at its geometrically mirrored position.
         const auto& m = facade->model.values;
@@ -2152,6 +2155,7 @@ void sceneChecks() {
     skyCloudChecks(window.drawableSize());
     skyPanoramaChecks(assets, window.drawableSize());
     texturedSkyChecks(assets, world, window.drawableSize());
+    skyCycleChecks(assets, world, window.drawableSize());
     buildingMaterialChecks(assets, window.drawableSize());
     streetMaterialChecks(assets, world, window.drawableSize());
     sceneryChecks(assets, world, window.drawableSize());

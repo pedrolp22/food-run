@@ -28,6 +28,7 @@ enum class TextureId {
     Grass,
     Fence,
     Leaf,
+    Moon,
     Count
 };
 enum class ModelId { Cone, Barrier, TrashCan, Bench, Tree, Count };

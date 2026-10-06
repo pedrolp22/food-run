@@ -4,6 +4,7 @@
 #include "engine/graphics/Material.h"
 #include "engine/graphics/Mesh.h"
 #include "engine/graphics/Texture.h"
+#include "engine/math/Math.h"
 
 namespace engine::graphics {
 class Model {
@@ -44,8 +45,12 @@ class Model {
     Model(const Model&) = delete;
     Model& operator=(const Model&) = delete;
     const std::vector<Primitive>& primitives() const { return primitives_; }
+    math::Vec3 boundsCenter() const { return boundsCenter_; }
+    math::Vec3 boundsHalfExtent() const { return boundsHalfExtent_; }
 
   private:
     std::vector<Primitive> primitives_;
+    math::Vec3 boundsCenter_{};
+    math::Vec3 boundsHalfExtent_{};
 };
 } // namespace engine::graphics

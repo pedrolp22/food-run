@@ -15,6 +15,10 @@ uniform uint uSkyLayoutSeed;
 uniform float uSkyEffectTime;
 uniform vec4 uNightStars; // Density, angular radius, brightness, night visibility.
 uniform vec2 uStarTwinkle; // Speed and strength.
+uniform sampler2D uMoonTexture;
+uniform vec3 uMoonDirection;
+uniform vec2 uMoonSize; // Tangent-plane half-width and half-height.
+uniform vec3 uMoonLight; // Night visibility, disc brightness, halo strength.
 
 float authoredSkyRandom(uint key) {
     key ^= uSkyLayoutSeed * 747796405u;
@@ -106,6 +110,28 @@ vec3 authoredStars(vec3 ray) {
     return tint * glow * twinkle * uNightStars.z * uNightStars.w * smoothstep(0.035, 0.2, ray.y);
 }
 
+vec3 authoredMoon(vec3 ray, vec3 sky) {
+    if (uMoonLight.x <= 0.0) { return sky; }
+    float facing = dot(ray, uMoonDirection);
+    if (facing <= 0.0) { return sky; }
+    vec3 up = abs(uMoonDirection.y) > 0.99 ? vec3(0.0, 0.0, 1.0) : vec3(0.0, 1.0, 0.0);
+    vec3 right = normalize(cross(uMoonDirection, up));
+    up = cross(right, uMoonDirection);
+    // A plane perpendicular to the moon's bearing preserves the texture's
+    // shape at every camera bearing and viewport aspect.
+    vec2 disc = vec2(dot(ray, right), dot(ray, up)) / facing / uMoonSize;
+    float radius = length(disc);
+    float halo = exp(-max(radius - 0.9, 0.0) * 2.6) * (1.0 - smoothstep(2.0, 3.5, radius));
+    sky = min(sky + vec3(0.78, 0.86, 1.0) * halo * uMoonLight.z * uMoonLight.x, vec3(1.0));
+    vec2 uv = disc * 0.5 + 0.5;
+    if (all(greaterThanEqual(uv, vec2(0.0))) && all(lessThanEqual(uv, vec2(1.0)))) {
+        vec4 texel = textureLod(uMoonTexture, uv, 0.0);
+        vec3 glow = min(texel.rgb * uMoonLight.y + vec3(0.035, 0.04, 0.05), vec3(1.0));
+        sky = mix(sky, glow, texel.a * uMoonLight.x);
+    }
+    return sky;
+}
+
 vec3 sampleCloudSky(vec3 ray) {
     float elevation = sqrt(clamp(ray.y, 0.0, 1.0));
     vec3 color = mix(uCloudSkyHorizon, uCloudSkyTop, smoothstep(0.0, 0.85, elevation));
@@ -115,6 +141,7 @@ vec3 sampleCloudSky(vec3 ray) {
     // Distant layers sit behind the shaded foreground artwork. Transparent
     // pixels reveal the gradient, rather than drawing opaque image rectangles.
     color = min(color + authoredStars(ray), vec3(1.0)); // Clouds pass in front of fixed, twinkling stars.
+    color = authoredMoon(ray, color);
     vec4 farCloud = cloudSprite(uCloudTextures[2], direction, uCloudLayouts[2], uCloudSettings[2],
                                uCloudVariation[2], uCloudWarp[2], 2u);
     vec4 midCloud = cloudSprite(uCloudTextures[1], direction, uCloudLayouts[1], uCloudSettings[1],

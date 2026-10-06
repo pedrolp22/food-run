@@ -10,8 +10,8 @@ can finish smoothly while gameplay is frozen.
 `Simulation` and the domain types under `include/game/` have no renderer or SDL dependency.
 An explicit random seed allows reproducible simulation within the same standard-library implementation.
 `GameState::dayNight` starts in daylight. `Simulation` checks distance and pickup points after each scoring update:
-every 5,000 points alternates the target between night and day. `DayNightCycle` eases to rose dusk, holds it for six seconds,
-then eases to the target, taking 30 seconds in total. These values are set in `GameConfig.h`. Rapid milestone changes
+every 5,000 points alternates the target between night and day. `DayNightCycle` eases to rose dusk, holds it for two seconds,
+then eases to the target, taking 12 seconds in total. These values are set in `GameConfig.h`. Rapid milestone changes
 retarget from the current phase without a jump. Presentation samples the fixed-step remainder without mutating the cycle;
 game over freezes it and restart clears it along with the score.
 
@@ -207,13 +207,34 @@ occlusion and final PSX RGB555 conversion still apply. Shadowed glass retains in
 zero disables world reflections, including local captures and authored sky reflections, while retaining the sky background.
 `planarReflectionSize` sets the full-view longest-side resolution (default 512), cropped to each plane's visible area;
 zero disables planar captures while retaining the distant environment fallback.
-`maxPlanarReflections` limits the number of local captures (default 6), and `planarReflectionDistance` limits the camera's
-distance to the nearest point of a facade (default 70). `planarReflectionFadeDistance` (default 20) smoothly blends local
-captures into the distant environment between 50 and 70 units, reaching zero before the capture is dropped. Planes near
-the capture-budget cutoff also blend down before exchanging priority slots. `WindowMaterial::worldReflections = false` selects only the analytic
-environment per facade. Capture targets are cached, with resolution rounded to 32-pixel buckets to limit reallocations
-during motion. Reflection passes cull out-of-view quads, cubes and sprites while retaining imported models with unknown bounds.
-An opaque quad/cube depth prepass restricts the captured sky to uncovered pixels; other geometry keeps its normal alpha behavior.
+`maxPlanarReflections` sets the high-detail budget (default 6); zero disables planar captures. All other visible planes
+retain lower-resolution live views at `distantPlanarReflectionSize` (default 128, positive). The budget changes detail,
+not reflection presence. Nonpriority planes gain detail gradually between 90 and 35 units using their shared building
+distance, reaching full nearby resolution. `planarReflectionDistance` limits distance to the nearest related face, or to the
+individual facade when ungrouped (default 120). `planarReflectionFadeDistance` (default 30) blends local captures into
+the distant environment between 90 and 120 units, reaching zero before a capture is dropped.
+`Quad::reflectionId` optionally identifies a facade across rebuilt/moving scenes. Game IDs encode the lot, column,
+side and face; coplanar groups keep all member IDs. Unidentified static scenes match by plane. `Quad::reflectionGroupId`
+links building faces and roofs with one stable building identity, sharing nearest distance and activation strength.
+Activation starts when the building enters range, including faces currently outside the view or hidden by another
+building. A newly visible side therefore inherits the same fade state instead of starting another fade.
+Selected planes receive a 20% detail-priority preference, with resolution changes eased by
+`planarReflectionBlendSeconds` (default .25) using `Scene::time`. Frozen time holds blends; rewind, mode and viewport
+changes reset selection. Nearby views (within 35 units), detailed planes and ungrouped facades update every frame.
+Other grouped views remain populated between staggered refreshes at `distantPlanarReflectionUpdateSeconds` (default .2;
+zero updates every frame). Stable building identities distribute refresh phases; new faces capture immediately.
+Between refreshes, the saved projection follows the building's translation to retain mapping during small scrolling
+movements. Camera translation over .5 units, orientation changes or projection changes also force a refresh.
+`WindowMaterial::worldReflections = false` selects only the analytic environment per facade. Capture slots and their
+targets persist across priority changes. Cropped viewports use 32-pixel buckets while allocations grow in power-of-two
+buckets without shrinking; a UV scale samples only the populated viewport. Blur mip footprints are limited by its
+shorter dimension. PSX captures do not exceed the main raster's pixel density. Reflection passes cache world bounds
+once per frame, including exact imported-model vertex bounds, and cull them against the reflection frustum/clip plane.
+Closed, opaque rectangular building groups also hide captures entirely behind their projected convex silhouettes;
+partial visibility, near-plane crossings and gaps in facade coverage conservatively retain captures.
+Authored skies draw once before geometry, avoiding a duplicate depth pass; their shared sky uniforms are uploaded once
+per program per frame. Shared lighting/environment uniforms upload once per program per view. The expensive
+procedural fallback retains an opaque quad/cube depth prepass to restrict sky shading to uncovered pixels.
 Additional world views trade rendering time for local detail; scenes without reflective glass skip capture.
 There are no timed bands, pane phases or hard-coded reflection shapes. The microfacet lobe widens over unresolved raster
 footprints to limit subpixel glints. Source texture sampling, PSX affine geometry, RGB555 and selective dithering still apply;
@@ -241,9 +262,17 @@ clock. A few brighter stars have small sparkle rays. Clouds composite over the s
 `kNightStarDensity`, `kNightStarSizeDegrees`, `kNightStarBrightness`, `kNightStarTwinkleSpeed` and
 `kNightStarTwinkleStrength` tune the game defaults. Stars and cloud animation freeze with game time and are shared with
 planar captures and distant window reflections. The procedural fallback keeps its own existing star style.
+`Sky::moon` borrows the alpha texture `assets/textures/sky/moon.png` in the game. A world-oriented tangent plane preserves
+its angular diameter (default 6.5 degrees) and source aspect at any bearing or viewport shape. Nearest level-zero
+sampling retains crater detail. A modest cool halo surrounds the emissive disc; both fade in between night phases .5
+and .9 behind the cloud layers and are shared by planar and distant window reflections. `kMoonSizeDegrees`,
+`kMoonBrightness` and `kMoonGlowStrength` set the game's appearance. `kNightLightDirection` supplies both the moon's
+bearing and the nighttime directional light, so its illumination and shadows agree.
 `Sky::nightBlend` continuously interpolates `top`/`bottom` daylight through `dusk` at 0.5 to `night` at 1.
 `Sky::palette()` supplies the same sky, horizon and cloud tint to backgrounds, material lighting and fog. The game also
-changes directional light color and ambient fill, with blue moonlight keeping nighttime streets readable. Local reflections
+changes directional light color and ambient fill, with blue moonlight keeping nighttime streets readable.
+Normalized `kDayLightDirection`, `kDuskLightDirection` and `kNightLightDirection` interpolate with the same phase;
+the shadow view-projection matrix follows that light without an angle jump at dusk. Local reflections
 render this same sky; distant panes sample it directly. Cloud sizes, elevations, offsets, speeds, opacity and all three
 palettes are configured in `GameConfig.h`.
 For reusable scenes, `Sky::panorama` still supports an optional upper-hemisphere bitmap. Its elevation is compressed
@@ -324,6 +353,10 @@ from the color-dither mask, preserving transparent holes and avoiding dithering 
 uses a swept player path in scrolling track coordinates. Lifted leaves tumble and fade once, retain their spent identity
 while their lot remains visible, and reset when time or scroll restarts. The visible leaf budget keeps the nearest leaves.
 `SceneryLayout.h` shares building lot geometry with parks: two frontage columns are reserved for larger lawns, and
+consecutive park lots extend to a shared tile boundary. `Scenery.cpp` draws their combined occupancy on one grass grid,
+omitting fences wherever another lawn cell adjoins it. Shared UV phase and tint remove visible lot seams; widths,
+outer corner notches, sidewalk entrances and per-lot tree groups preserve variation. Neighbor occupancy is evaluated
+outside the visible lot range so scrolling never adds a divider through an existing park. Separate lots retain gaps, and
 brick forecourt gardens are split around a clear entrance corridor. Gardens anchor to the straight facade, with partial
 grass tiles filling their exact width and no fence against the building wall. Texture repeats follow the trimmed width.
 Model scale is limited by neighboring facade clearance.

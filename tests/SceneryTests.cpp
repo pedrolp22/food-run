@@ -39,10 +39,11 @@ void parkLayoutChecks(const game::GameAssets& assets, game::WorldScene& world) {
         (GameConfig::kLanePositions.back() - GameConfig::kLanePositions.front() + 1.85f) * .5f + 1.1f;
     std::set<int> treeHeights;
     bool left = false, right = false, leftGarden = false, rightGarden = false, trimmedTile = false;
+    int joinedParks = 0;
     for (float scroll : {0.0f, 5.0f, 37.0f, 99.0f, 1217.0f}) {
         const Scene scene = world.build(0, scroll, 1, {}, {});
         std::vector<Bounds> lawns, roofs, localLawns, localFences, fenceBounds;
-        std::vector<const Quad*> doors;
+        std::vector<const Quad*> doors, fenceQuads, grassQuads;
         std::vector<Mat4> poses;
         const auto parkPose = [&](const DrawCommand& object) -> const Mat4* {
             if (const auto* quad = std::get_if<Quad>(&object);
@@ -63,6 +64,7 @@ void parkLayoutChecks(const game::GameAssets& assets, game::WorldScene& world) {
             }
             if (const auto* quad = std::get_if<Quad>(&object)) {
                 if (quad->texture == &assets.texture(game::TextureId::Grass)) {
+                    grassQuads.push_back(quad);
                     CHECK(quad->pbrSurface && quad->surfaceMaterial.roughness > .9f && !quad->castsShadow);
                     CHECK(quad->materialTextures.properties ==
                           assets.materialTextures(game::TextureId::Grass).properties);
@@ -79,6 +81,7 @@ void parkLayoutChecks(const game::GameAssets& assets, game::WorldScene& world) {
                     lawns.push_back(bounds(*quad));
                     localLawns.push_back(bounds(*quad, &track));
                 } else if (quad->texture == &assets.texture(game::TextureId::Fence)) {
+                    fenceQuads.push_back(quad);
                     CHECK(quad->pbrSurface && quad->doubleSided && near(quad->alphaCutoff, .5f));
                     CHECK(quad->materialTextures.properties ==
                           assets.materialTextures(game::TextureId::Fence).properties);
@@ -98,6 +101,53 @@ void parkLayoutChecks(const game::GameAssets& assets, game::WorldScene& world) {
             for (const auto& roof : roofs) {
                 CHECK(lawn.x1 <= roof.x0 + .00002f || roof.x1 <= lawn.x0 + .00002f || lawn.z1 <= roof.z0 ||
                       roof.z1 <= lawn.z0); // Gardens share their wall boundary without extending under the building.
+            }
+        }
+        const auto grassy = [&](Vec3 p) {
+            p.x -= track.offset(p.z);
+            return std::any_of(localLawns.begin(), localLawns.end(), [&](const auto& lawn) {
+                return p.x >= lawn.x0 - .001f && p.x <= lawn.x1 + .001f && p.z >= lawn.z0 - .001f &&
+                       p.z <= lawn.z1 + .001f;
+            });
+        };
+        for (const auto* fence : fenceQuads) {
+            const auto& m = fence->model.values;
+            const auto normal = normalize(fence->normal);
+            const Vec3 a{m[12] + normal.x * .05f, 0, m[14] + normal.z * .05f};
+            const Vec3 b{m[12] - normal.x * .05f, 0, m[14] - normal.z * .05f};
+            CHECK(!grassy(a) || !grassy(b)); // No fence divides adjacent lawn tiles, including stepped outlines.
+        }
+        const int firstLot = static_cast<int>(std::floor((scroll - 12) / game::scenery::buildingSpacing));
+        const int lastLot = static_cast<int>(std::ceil((scroll + 100) / game::scenery::buildingSpacing));
+        for (float side : {-1.f, 1.f}) {
+            for (int lot = firstLot; lot < lastLot; ++lot) {
+                if (!game::scenery::hasPocketPark(game::scenery::streetLotSeed(lot, side)) ||
+                    !game::scenery::hasPocketPark(game::scenery::streetLotSeed(lot + 1, side))) {
+                    continue;
+                }
+                ++joinedParks;
+                const float seam = scroll - (lot + .5f) * game::scenery::buildingSpacing;
+                const float x = side * (sidewalkEdge + .6f + GameConfig::kGrassTileSize * 1.5f);
+                for (int step = -10; step <= 10; ++step) {
+                    const float z = seam + step * GameConfig::kGrassTileSize * .25f;
+                    CHECK(grassy({x + track.offset(z), 0, z})); // Fill the old gap between consecutive green lots.
+                }
+                const Quad* previous = nullptr;
+                for (const auto* grass : grassQuads) {
+                    const auto& m = grass->model.values;
+                    const float localX = m[12] - track.offset(m[14]);
+                    if (side * localX <= 0 || std::abs(m[14] - seam) > GameConfig::kGrassTileSize * 2) {
+                        continue;
+                    }
+                    if (previous) {
+                        CHECK(near(grass->color.r, previous->color.r));
+                        const float u = grass->textureOffset.x - previous->textureOffset.x;
+                        const float v = grass->textureOffset.y - previous->textureOffset.y;
+                        CHECK(near(u, std::round(u), .0002f) && near(v, std::round(v), .0002f));
+                    }
+                    previous = grass;
+                }
+                CHECK(previous); // Joined lots share texture phase and tint instead of showing a module seam.
             }
         }
         for (const auto* door : doors) {
@@ -202,7 +252,7 @@ void parkLayoutChecks(const game::GameAssets& assets, game::WorldScene& world) {
         }
         CHECK(index == poses.size());
     }
-    CHECK(left && right && leftGarden && rightGarden && trimmedTile && treeHeights.size() > 5);
+    CHECK(left && right && leftGarden && rightGarden && trimmedTile && treeHeights.size() > 5 && joinedParks > 0);
 }
 
 void leafMotionChecks(const game::GameAssets& assets) {

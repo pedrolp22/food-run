@@ -33,6 +33,7 @@ uniform bool uHasPlanarReflection;
 uniform mat4 uPlanarReflectionViewProjection;
 uniform float uPlanarReflectionMaxLod;
 uniform float uPlanarReflectionStrength;
+uniform vec2 uPlanarReflectionTextureScale;
 uniform float uWindowReflectance;
 uniform float uWindowBackingTint;
 uniform bool uHasSkyPanorama;
@@ -107,7 +108,12 @@ void main() {
         if (projected.w > 0.0 && all(greaterThanEqual(reflectionUv, vec2(0.0))) &&
             all(lessThanEqual(reflectionUv, vec2(1.0)))) {
             float lod = pow(clamp(roughness, 0.0, 1.0), 2.0) * uPlanarReflectionMaxLod;
-            vec3 world = textureLod(uPlanarReflection, reflectionUv, lod).rgb;
+            // Persistent buffers may be larger than the current cropped view.
+            // Sample only its populated viewport, including at blurred mip levels.
+            vec2 texelRadius = vec2(exp2(lod) * 0.5) / vec2(textureSize(uPlanarReflection, 0));
+            vec2 sampleUv = clamp(reflectionUv * uPlanarReflectionTextureScale, texelRadius,
+                                  uPlanarReflectionTextureScale - texelRadius);
+            vec3 world = textureLod(uPlanarReflection, sampleUv, lod).rgb;
             worldEnvironment = mix(worldEnvironment, world, uPlanarReflectionStrength);
         }
     }

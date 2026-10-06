@@ -8,25 +8,30 @@ namespace engine::graphics {
 struct RenderSettings {
     Size retroSize = {240, 320}; // PSX raster.
     int shadowMapSize = 2048;
-    float retroPixelStep = 1;      // PSX integer screen coordinates; zero disables snapping.
-    float modelAffineStrength = 1; // PSX only, [0, 1]: full affine mapping by default.
-    bool psxSubdivideQuads = true; // Stable geometry grids keep large roads/facades readable.
-    float retroSnapStrength = .45f; // Blend toward the integer grid; 1 enables full hardware-style snapping.
+    float retroPixelStep = 1;         // PSX integer screen coordinates; zero disables snapping.
+    float modelAffineStrength = 1;    // PSX only, [0, 1]: full affine mapping by default.
+    bool psxSubdivideQuads = true;    // Stable geometry grids keep large roads/facades readable.
+    float retroSnapStrength = .45f;   // Blend toward the integer grid; 1 enables full hardware-style snapping.
     float retroAffineStrength = .35f; // Shared PSX UV-warp intensity, multiplied by each command's strength.
     float retroDitherStrength = 1; // PSX color/shade transitions and shadow-edge blends, [0, 1]; zero disables dither.
     bool psxDitheredShadows = false; // Saturn-style shadow transparency, independent of RGB dithering.
-    float psxDitheredShadowDarkness = .8f; // Suppress ambient/sky light in covered pixels, [0, 1]; holes stay fully lit.
+    float psxDitheredShadowDarkness =
+        .8f;                     // Suppress ambient/sky light in covered pixels, [0, 1]; holes stay fully lit.
     bool psxDistanceFog = false; // Stored preference, applied only in PSX mode; the game enables it initially.
-    float psxFogStart = 45; // Nonnegative camera-space start distance; leave nearby action clear.
-    float psxFogEnd = 125; // Finite end distance greater than start.
+    float psxFogStart = 45;      // Nonnegative camera-space start distance; leave nearby action clear.
+    float psxFogEnd = 125;       // Finite end distance greater than start.
     Color psxFogColor = {.74f, .86f, .97f}; // Custom daylight color when psxFogFollowsSky is false.
     Color psxNightFogColor = {.38f, .31f, .40f};
-    bool psxFogFollowsSky = true; // Distance fade targets the regular horizon; does not recolor the sky/materials.
-    int worldReflectionMapSize = 128;    // Cubemap face size for procedural skies; 0 disables all world reflections.
-    int planarReflectionSize = 512;      // Full-view longest side, cropped to the visible facade. 0 disables planar.
-    int maxPlanarReflections = 6;        // Capture the most visible nearby facade planes each frame.
-    float planarReflectionDistance = 70; // Maximum distance from the camera to a facade's nearest point.
-    float planarReflectionFadeDistance = 20; // Blend to the distant environment before the local distance limit.
+    bool psxFogFollowsSky = true;     // Distance fade targets the regular horizon; does not recolor the sky/materials.
+    int worldReflectionMapSize = 128; // Cubemap face size for procedural skies; 0 disables all world reflections.
+    int planarReflectionSize = 512;   // Full-view longest side, cropped to the visible facade. 0 disables planar.
+    int maxPlanarReflections = 6; // Full-detail priority planes; other visible faces increase detail as they approach.
+    int distantPlanarReflectionSize = 128; // Full-view longest side for captures outside the detail budget.
+    float distantPlanarReflectionUpdateSeconds =
+        .2f;                                   // Stagger distant refreshes; nearby faces still update every frame.
+    float planarReflectionDistance = 120;      // Maximum distance to a facade, or its nearest related building face.
+    float planarReflectionFadeDistance = 30;   // Blend to the distant environment before the local distance limit.
+    float planarReflectionBlendSeconds = .25f; // Shared building activation/detail changes; zero switches immediately.
 };
 // Requires a current OpenGL 3.3 context. Does not own a window or swap buffers.
 class SceneRenderer {

@@ -4,6 +4,7 @@
 #include "engine/math/TrackCurve.h"
 #include "game/GameAssets.h"
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <span>
 #include <unordered_map>
@@ -26,12 +27,18 @@ class WorldScene {
     void addGround(float scroll);
     void addBuildings(float scroll);
     void addBrickFacade(const Transform& transform, Face face, engine::math::Vec3 normal, float fade, bool windows,
-                        bool door);
+                        bool door, std::uint64_t reflectionId);
     void addSidewalk(float scroll);
     void addParks(float scroll);
     void addBrickGarden(float side, float facadeX, float centerZ, float depth, unsigned int seed);
+    struct GrassLayout {
+        std::function<bool(int, int)> occupied;
+        std::vector<int> entrances;
+        engine::math::Vec2 textureOffset;
+    };
     void addGrassPatch(float side, float innerX, float startZ, int columns, int rows, unsigned int seed, bool notched,
-                       bool fenced, bool entrance, std::optional<engine::math::Vec2> buildingWall = std::nullopt);
+                       bool fenced, bool entrance, std::optional<engine::math::Vec2> buildingWall = std::nullopt,
+                       const GrassLayout* layout = nullptr);
     void addLeaves(float playerX, float scroll);
     struct TreeEmitter {
         std::uint64_t id;

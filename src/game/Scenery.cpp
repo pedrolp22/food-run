@@ -10,7 +10,8 @@ using namespace GameConfig;
 using namespace scenery;
 
 void WorldScene::addGrassPatch(float side, float innerX, float startZ, int columns, int rows, unsigned int seed,
-                               bool notched, bool fenced, bool entrance, std::optional<Vec2> buildingWall) {
+                               bool notched, bool fenced, bool entrance, std::optional<Vec2> buildingWall,
+                               const GrassLayout* layout) {
     // An attached garden shares the building's straight facade, rather than curving away from it with the road.
     const float anchorOffset = buildingWall ? track_.offset(buildingWall->y) : 0;
     const float width = buildingWall ? side * (buildingWall->x - anchorOffset) - innerX : columns * kGrassTileSize;
@@ -22,6 +23,9 @@ void WorldScene::addGrassPatch(float side, float innerX, float startZ, int colum
     const int notchRows = rows >= 5 ? choose(7, 1, 2) : 1;
     const int notchColumns = columns >= 5 ? choose(14, 1, 2) : 1;
     const auto occupied = [&](int column, int row) {
+        if (layout) {
+            return layout->occupied(column, row);
+        }
         if (column < 0 || column >= columns || row < 0 || row >= rows) {
             return false;
         }
@@ -33,7 +37,7 @@ void WorldScene::addGrassPatch(float side, float innerX, float startZ, int colum
     if (!occupied(0, entryRow)) {
         entryRow = rows / 2;
     }
-    const Vec2 grassOffset = {hashFloat(seed, 9), hashFloat(seed, 10)};
+    const Vec2 grassOffset = layout ? layout->textureOffset : Vec2{hashFloat(seed, 9), hashFloat(seed, 10)};
     const float tint = std::lerp(.88f, 1.0f, hashFloat(seed, 11));
     const auto groundPoint = [&](float column, float row) {
         const float z = startZ + row * kGrassTileSize;
@@ -59,7 +63,9 @@ void WorldScene::addGrassPatch(float side, float innerX, float startZ, int colum
         const float length = c0 == c1 ? (r1 - r0) * kGrassTileSize : std::abs(columnDistance(c1) - columnDistance(c0));
         const float repeat = length / (kParkFenceHeight * command.texture->aspect());
         command.textureScale = {repeat, 1};
-        command.textureOffset = {uvOffset * kGrassTileSize / (kParkFenceHeight * command.texture->aspect()), 0};
+        const float origin = layout && c0 == c1 ? layout->textureOffset.y : 0;
+        command.textureOffset = {(uvOffset + origin) * kGrassTileSize / (kParkFenceHeight * command.texture->aspect()),
+                                 0};
         command.worldSize = {length, kParkFenceHeight};
         command.alphaCutoff = .5f;
         command.doubleSided = command.pbrSurface = true;
@@ -92,7 +98,10 @@ void WorldScene::addGrassPatch(float side, float innerX, float startZ, int colum
             if (!fenced) {
                 continue;
             }
-            if (!occupied(column - 1, row) && !(entrance && column == 0 && row == entryRow)) {
+            const bool openEntry =
+                layout ? std::find(layout->entrances.begin(), layout->entrances.end(), row) != layout->entrances.end()
+                       : entrance && row == entryRow;
+            if (!occupied(column - 1, row) && !(column == 0 && openEntry)) {
                 fence(column, row, column, row + 1, row);
             }
             if (!occupied(column + 1, row) && !(buildingWall && column == columns - 1)) {
@@ -144,23 +153,104 @@ void WorldScene::addParks(float roadScroll) {
     constexpr int minRows = std::min(kParkMinLengthTiles, maxRows);
     const int first = static_cast<int>(std::floor((roadScroll - 12) / buildingSpacing));
     const int last = static_cast<int>(std::ceil((roadScroll + 100) / buildingSpacing));
+    struct ParkLot {
+        bool present = false;
+        unsigned int seed = 0;
+        int columns = 0, rows = 0, originalStart = 0, start = 0, end = 0;
+        int corner = 0, notchColumns = 0, notchRows = 0;
+        bool notched = false;
+    };
+    const auto choose = [](unsigned int seed, unsigned int index, int low, int high) {
+        return low + std::min(high - low, static_cast<int>(hashFloat(seed, index) * (high - low + 1)));
+    };
     for (float side : {-1.0f, 1.0f}) {
-        for (int lot = first; lot <= last; ++lot) {
+        // Neighbor lots outside the draw range still determine the border.
+        // Scrolling a joined park into view must not add a fence through it.
+        std::vector<ParkLot> lots(static_cast<std::size_t>(last - first + 3));
+        int firstRow = 0, lastRow = 0;
+        bool hasGrass = false;
+        for (int lot = first - 1; lot <= last + 1; ++lot) {
             const auto lotSeed = streetLotSeed(lot, side);
             if (!hasPocketPark(lotSeed)) {
                 continue;
             }
-            const auto seed = parkSeed(lotSeed);
-            const auto choose = [&](unsigned int index, int low, int high) {
-                return low + std::min(high - low, static_cast<int>(hashFloat(seed, index) * (high - low + 1)));
-            };
-            const int columns = choose(1, minColumns, maxColumns), rows = choose(2, minRows, maxRows);
-            const float width = columns * kGrassTileSize, length = rows * kGrassTileSize;
-            const float innerX = sidewalkHalfWidth + std::lerp(.2f, .6f, hashFloat(seed, 3));
+            auto& plot = lots[lot - first + 1];
+            plot.present = true;
+            plot.seed = parkSeed(lotSeed);
+            const auto seed = plot.seed;
+            plot.columns = choose(seed, 1, minColumns, maxColumns);
+            plot.rows = choose(seed, 2, minRows, maxRows);
+            const float length = plot.rows * kGrassTileSize;
             const float zJitter = (hashFloat(seed, 4) - .5f) * (buildingSpacing - length - 2);
+            plot.originalStart =
+                static_cast<int>(std::round((-lot * buildingSpacing + zJitter - length * .5f) / kGrassTileSize));
+            const bool farNeighbor = hasPocketPark(streetLotSeed(lot + 1, side));
+            const bool nearNeighbor = hasPocketPark(streetLotSeed(lot - 1, side));
+            plot.start = farNeighbor ? static_cast<int>(std::round(-(lot + .5f) * buildingSpacing / kGrassTileSize))
+                                     : plot.originalStart;
+            plot.end = nearNeighbor ? static_cast<int>(std::round(-(lot - .5f) * buildingSpacing / kGrassTileSize))
+                                    : plot.originalStart + plot.rows;
+            plot.corner = choose(seed, 6, 0, 3);
+            plot.notchRows = plot.rows >= 5 ? choose(seed, 7, 1, 2) : 1;
+            plot.notchColumns = plot.columns >= 5 ? choose(seed, 14, 1, 2) : 1;
+            plot.notched = hashFloat(seed, 5) < kParkNotchChance && !(plot.corner < 2 ? farNeighbor : nearNeighbor);
+            if (lot >= first && lot <= last) {
+                firstRow = hasGrass ? std::min(firstRow, plot.start) : plot.start;
+                lastRow = hasGrass ? std::max(lastRow, plot.end) : plot.end;
+                hasGrass = true;
+            }
+        }
+        if (!hasGrass) {
+            continue;
+        }
+        GrassLayout layout;
+        layout.occupied = [&](int column, int row) {
+            if (column < 0 || column >= maxColumns) {
+                return false;
+            }
+            const int globalRow = firstRow + row;
+            const int lot = static_cast<int>(std::round(-(globalRow + .5f) * kGrassTileSize / buildingSpacing));
+            if (lot < first - 1 || lot > last + 1) {
+                return false;
+            }
+            const auto& plot = lots[lot - first + 1];
+            if (!plot.present || column >= plot.columns || globalRow < plot.start || globalRow >= plot.end) {
+                return false;
+            }
+            const bool cornerColumn =
+                plot.corner % 2 ? column >= plot.columns - plot.notchColumns : column < plot.notchColumns;
+            const bool cornerRow =
+                plot.corner < 2 ? globalRow < plot.start + plot.notchRows : globalRow >= plot.end - plot.notchRows;
+            return !(plot.notched && cornerColumn && cornerRow);
+        };
+        for (int lot = first; lot <= last; ++lot) {
+            const auto& plot = lots[lot - first + 1];
+            if (!plot.present) {
+                continue;
+            }
+            int entry = plot.originalStart + choose(plot.seed, 8, 1, plot.rows - 2) - firstRow;
+            if (!layout.occupied(0, entry)) {
+                entry = plot.originalStart + plot.rows / 2 - firstRow;
+            }
+            layout.entrances.push_back(entry);
+        }
+        // One UV grid and tint keep the connected lawn continuous across lot
+        // boundaries; widths and outer corner notches still vary by lot.
+        const auto areaSeed = parkSeed(streetLotSeed(0, side));
+        const float innerX = sidewalkHalfWidth + std::lerp(.2f, .6f, hashFloat(areaSeed, 3));
+        layout.textureOffset = {hashFloat(areaSeed, 9), hashFloat(areaSeed, 10) + firstRow};
+        addGrassPatch(side, innerX, roadScroll + firstRow * kGrassTileSize, maxColumns, lastRow - firstRow, areaSeed,
+                      false, true, false, std::nullopt, &layout);
+        for (int lot = first; lot <= last; ++lot) {
+            const auto& plot = lots[lot - first + 1];
+            if (!plot.present) {
+                continue;
+            }
+            const auto seed = plot.seed;
+            const int columns = plot.columns, rows = plot.rows;
+            const float width = columns * kGrassTileSize;
+            const float startZ = roadScroll + plot.originalStart * kGrassTileSize;
             const float lotZ = roadScroll - lot * buildingSpacing;
-            const float startZ = lotZ + zJitter - length * .5f;
-            addGrassPatch(side, innerX, startZ, columns, rows, seed, hashFloat(seed, 5) < kParkNotchChance, true, true);
             const int trees = 1 + (rows >= 5 && hashFloat(seed, 12) < .65f) + (rows >= 7 && hashFloat(seed, 13) < .3f);
             for (int tree = 0; tree < trees; ++tree) {
                 const auto treeSeed = hashSeed(seed + tree * 293u);

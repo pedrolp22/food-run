@@ -129,6 +129,10 @@ struct CloudSkyUniforms {
     int time;
     int stars;
     int twinkle;
+    int moonTexture;
+    int moonDirection;
+    int moonSize;
+    int moonLight;
     std::array<int, 3> textures;
     std::array<int, 3> layouts;
     std::array<int, 3> settings;
@@ -138,7 +142,9 @@ struct CloudSkyUniforms {
         : enabled(shader.uniform("uHasCloudSky")), topColor(shader.uniform("uCloudSkyTop")),
           horizonColor(shader.uniform("uCloudSkyHorizon")), cloudTint(shader.uniform("uCloudTint")),
           seed(shader.uniform("uSkyLayoutSeed")), time(shader.uniform("uSkyEffectTime")),
-          stars(shader.uniform("uNightStars")), twinkle(shader.uniform("uStarTwinkle")) {
+          stars(shader.uniform("uNightStars")), twinkle(shader.uniform("uStarTwinkle")),
+          moonTexture(shader.uniform("uMoonTexture")), moonDirection(shader.uniform("uMoonDirection")),
+          moonSize(shader.uniform("uMoonSize")), moonLight(shader.uniform("uMoonLight")) {
         for (std::size_t index = 0; index < textures.size(); ++index) {
             const auto suffix = "[" + std::to_string(index) + "]";
             textures[index] = shader.uniform(("uCloudTextures" + suffix).c_str());
@@ -295,6 +301,7 @@ struct SkyscraperProgram {
     int planarReflectionViewProjection;
     int planarReflectionMaxLod;
     int planarReflectionStrength;
+    int planarReflectionTextureScale;
     int windowReflectance;
     int windowBackingTint;
     int panorama;
@@ -337,6 +344,7 @@ struct SkyscraperProgram {
           planarReflectionViewProjection(shader.uniform("uPlanarReflectionViewProjection")),
           planarReflectionMaxLod(shader.uniform("uPlanarReflectionMaxLod")),
           planarReflectionStrength(shader.uniform("uPlanarReflectionStrength")),
+          planarReflectionTextureScale(shader.uniform("uPlanarReflectionTextureScale")),
           windowReflectance(shader.uniform("uWindowReflectance")),
           windowBackingTint(shader.uniform("uWindowBackingTint")), panorama(shader.uniform("uPanorama")),
           panoramaOffset(shader.uniform("uPanoramaOffset")), hasSkyPanorama(shader.uniform("uHasSkyPanorama")),

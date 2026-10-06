@@ -36,7 +36,8 @@ constexpr std::array textures = {
     TextureSpec{TextureId::BrickDoor, "textures/brick_building/brick_building_door.png", false, true},
     TextureSpec{TextureId::Grass, "textures/grassy/grass.png", true, true},
     TextureSpec{TextureId::Fence, "textures/grassy/spikedfence_decor.png", true, true},
-    TextureSpec{TextureId::Leaf, "textures/grassy/leaf.png", false, true}};
+    TextureSpec{TextureId::Leaf, "textures/grassy/leaf.png", false, true},
+    TextureSpec{TextureId::Moon, "textures/sky/moon.png", false}};
 constexpr std::array models = {ModelSpec{ModelId::Cone, "traffic_cone", 1.0f},
                                ModelSpec{ModelId::Barrier, "barrier", 0.9f},
                                ModelSpec{ModelId::TrashCan, "trash_can", 0.75f},
@@ -54,8 +55,8 @@ GameAssets::GameAssets(const std::filesystem::path& root, bool mipmapped) {
     for (const auto& asset : textures) {
         const auto index = static_cast<std::size_t>(asset.id);
         const bool collectible = asset.id >= TextureId::Water && asset.id <= TextureId::Fries;
-        const bool skyTexture =
-            asset.id == TextureId::Skybox || (asset.id >= TextureId::Cloud1 && asset.id <= TextureId::Cloud3);
+        const bool skyTexture = asset.id == TextureId::Skybox || asset.id == TextureId::Moon ||
+                                (asset.id >= TextureId::Cloud1 && asset.id <= TextureId::Cloud3);
         const auto filter = !mipmapped || skyTexture || asset.id == TextureId::Leaf ? TextureFilter::Nearest
                             : asset.materialDetail                                  ? TextureFilter::Trilinear
                                                                                     : TextureFilter::Mipmapped;

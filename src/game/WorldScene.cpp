@@ -22,7 +22,7 @@ WorldScene::WorldScene(const GameAssets& assets)
     scene_.camera.target = {0, kCameraTargetHeight, kCameraTargetZ};
     scene_.camera.verticalFov = kCameraVerticalFov;
     scene_.camera.fisheyeStrength = kCameraFisheyeStrength;
-    scene_.light.direction = {-0.7f, 1.4f, -0.9f};
+    scene_.light.direction = {kDayLightDirection[0], kDayLightDirection[1], kDayLightDirection[2]};
     scene_.light.shadow.center = {0, 4, -32};
     const auto skyColor = [](const std::array<float, 3>& rgb) { return Color{rgb[0], rgb[1], rgb[2]}; };
     scene_.sky.top = skyColor(kDaySkyTop);
@@ -48,6 +48,11 @@ WorldScene::WorldScene(const GameAssets& assets)
     scene_.sky.layoutSeed = kSkyLayoutSeed;
     scene_.sky.stars = {kNightStarDensity, kNightStarSizeDegrees, kNightStarBrightness, kNightStarTwinkleSpeed,
                         kNightStarTwinkleStrength};
+    scene_.sky.moon = {&assets_.texture(TextureId::Moon),
+                       {kNightLightDirection[0], kNightLightDirection[1], kNightLightDirection[2]},
+                       kMoonSizeDegrees,
+                       kMoonBrightness,
+                       kMoonGlowStrength};
     scene_.objects.reserve(2000);
     scene_.effects.reserve(144);
     scene_.particles.reserve(kMaxVisibleLeaves);
@@ -58,14 +63,22 @@ const Scene& WorldScene::build(float playerX, float roadScroll, float gameTime, 
     scene_.time = gameTime;
     scene_.sky.nightBlend = std::isfinite(nightBlend) ? std::clamp(nightBlend, 0.0f, 1.0f) : 0;
     const float phase = scene_.sky.nightBlend;
+    const auto& from = phase < .5f ? kDayLightDirection : kDuskLightDirection;
+    const auto& to = phase < .5f ? kDuskLightDirection : kNightLightDirection;
+    const Vec3 fromDirection = normalize({from[0], from[1], from[2]});
+    const Vec3 toDirection = normalize({to[0], to[1], to[2]});
+    const float lightBlend = phase < .5f ? phase * 2 : phase * 2 - 1;
+    scene_.light.direction = normalize({std::lerp(fromDirection.x, toDirection.x, lightBlend),
+                                        std::lerp(fromDirection.y, toDirection.y, lightBlend),
+                                        std::lerp(fromDirection.z, toDirection.z, lightBlend)});
     scene_.light.ambient = phase < .5f ? std::lerp(kSkyAmbientLight[0], kSkyAmbientLight[1], phase * 2)
-                                     : std::lerp(kSkyAmbientLight[1], kSkyAmbientLight[2], phase * 2 - 1);
+                                       : std::lerp(kSkyAmbientLight[1], kSkyAmbientLight[2], phase * 2 - 1);
     scene_.sky.sunColor = scene_.sky.palette().cloudTint;
     if (phase > .5f) {
         const float t = phase * 2 - 1;
         scene_.sky.sunColor = {std::lerp(scene_.sky.dusk.cloudTint.r, kNightLightColor[0], t),
-                              std::lerp(scene_.sky.dusk.cloudTint.g, kNightLightColor[1], t),
-                              std::lerp(scene_.sky.dusk.cloudTint.b, kNightLightColor[2], t)};
+                               std::lerp(scene_.sky.dusk.cloudTint.g, kNightLightColor[1], t),
+                               std::lerp(scene_.sky.dusk.cloudTint.b, kNightLightColor[2], t)};
     }
     scene_.objects.clear();
     scene_.effects.clear();
@@ -151,6 +164,7 @@ void WorldScene::addBuildings(float roadScroll) {
         float side;
         bool streetAccess;
         unsigned int seed;
+        std::uint64_t reflectionId;
     };
 
     std::vector<Building> buildings;
@@ -218,7 +232,9 @@ void WorldScene::addBuildings(float roadScroll) {
                 buildings.push_back(
                     {bx, h * 0.5f - 0.08f - track_.drop(bz), bz, w, h, d,
                      brick ? &assets_.texture(TextureId::BrickWall) : &assets_.texture(TextureId::Skyscraper), fade,
-                     side, b == 0, lotSeed});
+                     side, b == 0, lotSeed,
+                     (static_cast<std::uint64_t>(static_cast<std::uint32_t>(i)) << 32) |
+                         (static_cast<std::uint64_t>(sideIndex) << 16) | (static_cast<std::uint64_t>(b) << 8)});
             }
         }
     }
@@ -235,31 +251,35 @@ void WorldScene::addBuildings(float roadScroll) {
                                building.d, building.seed);
             }
             addBrickFacade({building.x, building.cy, building.z + building.d * .5f, building.w, building.h, 1},
-                           Face::FrontBack, {0, 0, 1}, building.fade, true, false);
+                           Face::FrontBack, {0, 0, 1}, building.fade, true, false, building.reflectionId | 1);
             addBrickFacade({building.x, building.cy, building.z - building.d * .5f, building.w, building.h, 1},
-                           Face::FrontBack, {0, 0, -1}, building.fade, false, false);
+                           Face::FrontBack, {0, 0, -1}, building.fade, false, false, building.reflectionId | 2);
             const bool rightFacesStreet = building.side < 0;
             addBrickFacade({building.x + building.w * .5f, building.cy, building.z, building.d, building.h, 1},
                            Face::Side, {1, 0, 0}, building.fade, rightFacesStreet,
-                           rightFacesStreet && building.streetAccess);
+                           rightFacesStreet && building.streetAccess, building.reflectionId | 3);
             addBrickFacade({building.x - building.w * .5f, building.cy, building.z, building.d, building.h, 1},
                            Face::Side, {-1, 0, 0}, building.fade, !rightFacesStreet,
-                           !rightFacesStreet && building.streetAccess);
+                           !rightFacesStreet && building.streetAccess, building.reflectionId | 4);
             continue;
         }
         // A skyscraper image contains its complete facade; brick facades use whole tiles below.
         addTexturedQuad(*building.texture,
                         {building.x, building.cy, building.z + building.d * 0.5f, building.w, building.h, 1.0f},
-                        Face::FrontBack, 1, 1, {0, 0, 1}, building.fade, true, true);
+                        Face::FrontBack, 1, 1, {0, 0, 1}, building.fade, true, true)
+            .reflectionId = building.reflectionId | 1;
         addTexturedQuad(*building.texture,
                         {building.x, building.cy, building.z - building.d * 0.5f, building.w, building.h, 1.0f},
-                        Face::FrontBack, 1, 1, {0, 0, -1}, building.fade, true, true);
+                        Face::FrontBack, 1, 1, {0, 0, -1}, building.fade, true, true)
+            .reflectionId = building.reflectionId | 2;
         addTexturedQuad(*building.texture,
                         {building.x + building.w * 0.5f, building.cy, building.z, building.d, building.h, 1.0f},
-                        Face::Side, 1, 1, {1, 0, 0}, building.fade, true, true);
+                        Face::Side, 1, 1, {1, 0, 0}, building.fade, true, true)
+            .reflectionId = building.reflectionId | 3;
         addTexturedQuad(*building.texture,
                         {building.x - building.w * 0.5f, building.cy, building.z, building.d, building.h, 1.0f},
-                        Face::Side, 1, 1, {-1, 0, 0}, building.fade, true, true);
+                        Face::Side, 1, 1, {-1, 0, 0}, building.fade, true, true)
+            .reflectionId = building.reflectionId | 4;
     }
 
     for (const Building& building : buildings) {
@@ -269,12 +289,18 @@ void WorldScene::addBuildings(float roadScroll) {
         addTexturedQuad(
             assets_.texture(TextureId::BuildingTop),
             {building.x, building.h - 0.08f - track_.drop(building.z), building.z, building.w, building.d, 1.0f},
-            Face::Top, 1.0f, 1.0f, {0, 1, 0}, building.fade, false, true);
+            Face::Top, 1.0f, 1.0f, {0, 1, 0}, building.fade, false, true)
+            .reflectionGroupId = building.reflectionId | 128;
+    }
+    for (auto& object : scene_.objects) {
+        if (auto* surface = std::get_if<Quad>(&object); surface && surface->reflectionId) {
+            surface->reflectionGroupId = (surface->reflectionId & ~std::uint64_t{255}) | 128;
+        }
     }
 }
 
-void WorldScene::addBrickFacade(const Transform& transform, Face face, Vec3 normal, float fade, bool windows,
-                                bool door) {
+void WorldScene::addBrickFacade(const Transform& transform, Face face, Vec3 normal, float fade, bool windows, bool door,
+                                std::uint64_t reflectionId) {
     static_assert(kBrickFacadeTileWidth > 0);
     const float aspect = assets_.texture(TextureId::BrickWindow).aspect();
     // Fit at least one complete source tile even on the smallest single-story building.
@@ -304,6 +330,7 @@ void WorldScene::addBrickFacade(const Transform& transform, Face face, Vec3 norm
             quad.textureOffset = {(left + panelWidth * .5f) / tileWidth, bottom / tileHeight};
         }
         quad.facadeVerticalRange = {bottom / transform.scaleY, (bottom + height) / transform.scaleY};
+        quad.reflectionId = reflectionId;
     };
     const float halfWidth = transform.scaleX * .5f;
     if (!windows) {

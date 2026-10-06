@@ -1,4 +1,5 @@
 #include "TestSupport.h"
+#include "engine/graphics/Model.h"
 #include "engine/graphics/ReflectionMap.h"
 #include "engine/graphics/RenderTarget.h"
 #include "engine/graphics/SceneRenderer.h"
@@ -26,7 +27,7 @@ void stateChecks() {
     CHECK(value == 0);
     glGetIntegerv(GL_ACTIVE_TEXTURE, &value);
     CHECK(value == GL_TEXTURE0);
-    for (int unit = 0; unit <= 11; ++unit) {
+    for (int unit = 0; unit <= 12; ++unit) {
         glGetIntegeri_v(GL_SAMPLER_BINDING, unit, &value);
         CHECK(value == 0);
     }
@@ -264,6 +265,31 @@ void planarChecks(Size size) {
             }
         }
     }
+    engine::assets::ModelData modelData;
+    engine::assets::PrimitiveData primitive;
+    for (const auto position : {Vec3{57, 0, 0}, Vec3{63, 0, 0}, Vec3{63, 6, 0}, Vec3{57, 6, 0}}) {
+        primitive.vertices.insert(primitive.vertices.end(), {position.x, position.y, position.z, 0, 0, -1, 0, 0});
+    }
+    primitive.indices = {0, 1, 2, 0, 2, 3};
+    primitive.material.baseColor = {0, 0, 1, 1};
+    modelData.primitives.push_back(std::move(primitive));
+    Model model(modelData);
+    CHECK(model.boundsCenter().x == 60 && model.boundsCenter().y == 3);
+    CHECK(model.boundsHalfExtent().x == 3 && model.boundsHalfExtent().y == 3 && model.boundsHalfExtent().z == 0);
+    ModelInstance prop;
+    prop.model = &model;
+    prop.transform = translation({-60, -3, 7}); // Origin is outside the view; the imported vertices are inside it.
+    window.normal = {0, 0, 1};
+    window.model = scale({6, 6, 1});
+    scene.camera.position = {0, 0, 4};
+    scene.camera.target = {};
+    scene.sky.texturedClouds[0].texture = &backing;
+    scene.sky.texturedClouds[0].opacity = 0;
+    scene.objects = {window, prop};
+    for (auto mode : {RenderMode::Normal, RenderMode::Psx}) {
+        renderer.setMode(mode);
+        checkPosition(frame(), {0, 0, -7});
+    }
     RenderSettings invalid = settings;
     invalid.planarReflectionSize = -1;
     checkThrows([&] { SceneRenderer bad(invalid); });
@@ -335,6 +361,237 @@ void distanceFadeChecks(Size size) {
     settings.planarReflectionFadeDistance = -1;
     checkThrows([&] { SceneRenderer invalid(settings); });
 }
+void coverageChecks(Size size) {
+    RenderSettings settings;
+    settings.retroSize = size;
+    settings.retroPixelStep = settings.retroAffineStrength = settings.retroDitherStrength = 0;
+    settings.shadowMapSize = 32;
+    settings.worldReflectionMapSize = 32;
+    settings.planarReflectionSize = 128;
+    settings.distantPlanarReflectionSize = 64;
+    settings.maxPlanarReflections = 1;
+    constexpr float zero[] = {0}, one[] = {1};
+    Texture backing = Texture::fromRedChannel({1, 1}, zero);
+    Texture mask = Texture::fromRedChannel({1, 1}, one);
+    Quad left;
+    left.normal = {0, 0, 1};
+    left.texture = &backing;
+    left.skyscraperWindows = true;
+    left.materialTextures.glass = &mask;
+    left.windowMaterial.roughness = 0;
+    left.windowMaterial.reflectance = .35f; // Avoid saturation so intermediate handover brightness is measurable.
+    left.castsShadow = left.receivesShadow = false;
+    left.reflectionId = 1;
+    Quad right = left;
+    right.reflectionId = 2;
+    Quad sign;
+    sign.model = multiply(translation({0, 0, 9}), scale({100, 100, 1}));
+    sign.normal = {0, 0, -1};
+    sign.castsShadow = sign.receivesShadow = false;
+    sign.color = {1, 0, 0};
+    Scene scene;
+    scene.camera.position = {0, 0, 5};
+    scene.camera.target = {};
+    scene.sky.top = scene.sky.bottom = {0, 0, 0};
+    scene.sky.texturedClouds[0].texture = &backing;
+    scene.sky.texturedClouds[0].opacity = 0; // Direct, black authored sky; skip the distant cubemap.
+    scene.light.ambient = 1;
+    const auto sample = [&](const auto& pixels, Vec3 point, int channel) {
+        const auto projection = scene.camera.viewProjection(static_cast<float>(size.width) / size.height);
+        const auto clip = transformPoint(projection, point);
+        const auto& m = projection.values;
+        const float w = m[3] * point.x + m[7] * point.y + m[11] * point.z + m[15];
+        const int x = (clip.x / w * .5f + .5f) * size.width;
+        const int y = (clip.y / w * .5f + .5f) * size.height;
+        return int(pixels[(y * size.width + x) * 3 + channel]);
+    };
+    for (auto mode : {RenderMode::Normal, RenderMode::Psx}) {
+        SceneRenderer renderer(settings);
+        renderer.setMode(mode);
+        scene.time = 1;
+        left.model = multiply(translation({-1.3f, 0, 0}), scale({2.4f, 4, 1}));
+        right.model = multiply(translation({1.3f, 0, -.05f}), scale({2.2f, 4, 1}));
+        sign.color = {1, 0, 0};
+        const auto frame = [&] {
+            scene.objects = {left, right, sign};
+            renderer.render(scene, size);
+            stateChecks();
+            return capture(size);
+        };
+        const auto initial = frame();
+        const int litLeft = sample(initial, {-1.3f, 0, 0}, 0);
+        const int litRight = sample(initial, {1.3f, 0, -.05f}, 0);
+        CHECK(litLeft > 150 && litRight > 150); // The budget limits detail, not visible reflection coverage.
+        for (int tick = 0; tick < 8; ++tick) {
+            scene.time += 1.f / 60;
+            right.model.values[0] = tick % 2 ? 2.42f : 2.38f;
+            const auto tied = frame();
+            CHECK(sample(tied, {-1.3f, 0, 0}, 0) >= litLeft - 2);
+            CHECK(sample(tied, {1.3f, 0, -.05f}, 0) >= litRight - 2);
+        }
+        left.model.values[0] = .8f; // Swapping detail priority must not fade either face out.
+        scene.time += 1.f / 60;
+        const auto incoming = frame();
+        CHECK(sample(incoming, {-1.3f, 0, 0}, 0) >= litLeft - 2);
+        CHECK(sample(incoming, {1.3f, 0, -.05f}, 0) >= litRight - 2);
+        CHECK(frame() == incoming); // Frozen time remains deterministic during priority changes.
+        for (int tick = 0; tick < 20; ++tick) {
+            scene.time += 1.f / 60;
+            frame();
+        }
+        const auto settled = frame();
+        CHECK(sample(settled, {-1.3f, 0, 0}, 0) > 150);
+        CHECK(sample(settled, {1.3f, 0, -.05f}, 0) > 150);
+        sign.color = {0, 0, 1};
+        right.model.values[14] += .3f; // Keep identity while the facade moves, as the game's scrolling scenery does.
+        scene.time += 1.f / 60;
+        const auto moving = frame();
+        CHECK(sample(moving, {1.3f, 0, .25f}, 2) > 150);
+        CHECK(sample(moving, {1.3f, 0, .25f}, 0) < 40);
+        CHECK(sample(moving, {-1.3f, 0, 0}, 2) >
+              150); // Nearby faces outside the priority budget update every frame too.
+        right.model.values[0] = 1.1f;
+        right.windowMaterial.roughness = 1;
+        scene.time += 1.f / 60;
+        const auto thin = frame();
+        CHECK(sample(thin, {1.3f, 0, .25f}, 2) >
+              80); // A smaller crop in a retained buffer keeps its blurred reflection.
+        CHECK(sample(thin, {1.3f, 0, .25f}, 0) < 40);
+        right.windowMaterial.roughness = 0;
+    }
+    settings.planarReflectionBlendSeconds = -1;
+    checkThrows([&] { SceneRenderer invalid(settings); });
+}
+void buildingCoverageChecks(Size size) {
+    RenderSettings settings;
+    settings.retroSize = size;
+    settings.retroPixelStep = settings.retroAffineStrength = settings.retroDitherStrength = 0;
+    settings.shadowMapSize = settings.worldReflectionMapSize = 32;
+    settings.planarReflectionSize = 128;
+    settings.distantPlanarReflectionSize = 64;
+    settings.maxPlanarReflections = 1;
+    constexpr float zero[] = {0}, one[] = {1};
+    Texture backing = Texture::fromRedChannel({1, 1}, zero);
+    Texture mask = Texture::fromRedChannel({1, 1}, one);
+    Quad front;
+    front.texture = &backing;
+    front.materialTextures.glass = &mask;
+    front.skyscraperWindows = true;
+    front.normal = {0, 0, 1};
+    front.windowMaterial.roughness = 0;
+    front.windowMaterial.reflectance = .35f;
+    front.castsShadow = front.receivesShadow = false;
+    front.reflectionId = 101;
+    front.reflectionGroupId = 10;
+    Quad side = front;
+    side.normal = {1, 0, 0};
+    side.reflectionId = 102;
+    Quad backdrop;
+    backdrop.normal = {0, 0, -1};
+    backdrop.color = {1, 0, 0};
+    backdrop.castsShadow = backdrop.receivesShadow = false;
+    Quad sideBackdrop = backdrop;
+    sideBackdrop.normal = {-1, 0, 0};
+    Scene scene;
+    scene.light.ambient = 1;
+    scene.sky.top = scene.sky.bottom = {0, 0, 0};
+    scene.sky.cloudCoverage = scene.sky.sunSize = 0;
+    scene.sky.texturedClouds[0].texture = &backing;
+    scene.sky.texturedClouds[0].opacity = 0;
+    const auto sample = [&](const auto& pixels, Vec3 point) {
+        const auto projection = scene.camera.viewProjection(float(size.width) / size.height);
+        const auto clip = transformPoint(projection, point);
+        const auto& m = projection.values;
+        const float w = m[3] * point.x + m[7] * point.y + m[11] * point.z + m[15];
+        const int x = (clip.x / w * .5f + .5f) * size.width;
+        const int y = (clip.y / w * .5f + .5f) * size.height;
+        CHECK(x >= 0 && x < size.width && y >= 0 && y < size.height);
+        return int(pixels[(y * size.width + x) * 3]);
+    };
+    for (auto mode : {RenderMode::Normal, RenderMode::Psx}) {
+        SceneRenderer renderer(settings);
+        renderer.setMode(mode);
+        scene.time = 1;
+        scene.camera.position = {6, 0, 7};
+        scene.camera.target = {0, 0, -2};
+        front.model = scale({4, 6, 1});
+        side.model = multiply(translation({2, 0, -2}), multiply(rotateY(kPi * .5f), scale({4, 6, 1})));
+        backdrop.model = multiply(translation({0, 0, 12}), scale({100, 100, 1}));
+        sideBackdrop.model = multiply(translation({12, 0, 0}), multiply(rotateY(kPi * .5f), scale({100, 100, 1})));
+        const auto frame = [&](bool both = true) {
+            scene.objects = {front, backdrop, sideBackdrop};
+            if (both)
+                scene.objects.push_back(side);
+            renderer.render(scene, size);
+            stateChecks();
+            return capture(size);
+        };
+        const int frontFull = sample(frame(false), {});
+        scene.time += 1.f / 60;
+        const int sideFull = sample(frame(), {2, 0, -2});
+        CHECK(frontFull > 150 &&
+              sideFull > 150); // A newly visible perpendicular face inherits its building's activation.
+        scene.objects.clear();
+        scene.time += 1;
+        renderer.render(scene, size);
+        scene.time += 1.f / 60;
+        const auto arriving = frame();
+        const int frontFade = sample(arriving, {}), sideFade = sample(arriving, {2, 0, -2});
+        CHECK(frontFade > 30 && frontFade < frontFull - 20);
+        CHECK(sideFade > 30 && sideFade < sideFull - 20);
+        CHECK(std::abs(float(frontFade) / frontFull - float(sideFade) / sideFull) < .04f);
+        CHECK(frame() == arriving);
+        // Reflect both sides well before the previous 90-unit cutoff, even
+        // though only one plane can receive the high-detail budget.
+        scene.time = 0;
+        scene.camera.position = {70, 0, 95};
+        scene.camera.target = {0, 0, -20};
+        scene.camera.farPlane = 1000;
+        front.model = scale({40, 40, 1});
+        side.model = multiply(translation({20, 0, -20}), multiply(rotateY(kPi * .5f), scale({40, 40, 1})));
+        backdrop.model = multiply(translation({0, 0, 200}), scale({1000, 1000, 1}));
+        sideBackdrop.model = multiply(translation({200, 0, 0}), multiply(rotateY(kPi * .5f), scale({1000, 1000, 1})));
+        const auto distant = frame();
+        CHECK(sample(distant, {}) > 80 && sample(distant, {20, 0, -20}) > 80);
+
+        // A building-shaped group with a passage through it must not hide
+        // glass visible through the gap, even if some panels overlap.
+        scene.camera.position = {0, 0, 5};
+        scene.camera.target = {0, 0, -12};
+        front.model = multiply(translation({.8f, 0, -12}), scale({1.4f, 4, 1}));
+        backdrop.model = multiply(translation({0, 0, 12}), scale({100, 100, 1}));
+        scene.objects = {front, backdrop};
+        Quad wall = front;
+        wall.skyscraperWindows = false;
+        wall.buildingSurface = true;
+        wall.materialTextures = {};
+        wall.surfaceMaterial.reflectivity = 0;
+        wall.reflectionId = 0;
+        wall.reflectionGroupId = 20;
+        for (float z : {-4.f, -6.f}) {
+            wall.normal = {0, 0, z == -4 ? 1.f : -1.f};
+            wall.model = multiply(translation({-1, 0, z}), scale({2, 4, 1}));
+            scene.objects.push_back(wall);
+            scene.objects.push_back(wall);
+        }
+        for (float x : {-2.f, 2.f}) {
+            wall.normal = {x < 0 ? -1.f : 1.f, 0, 0};
+            wall.model = multiply(translation({x, 0, -5}), multiply(rotateY(kPi * .5f), scale({2, 4, 1})));
+            scene.objects.push_back(wall);
+        }
+        wall.normal = {0, 1, 0};
+        wall.model = multiply(translation({0, 2, -5}), multiply(rotateX(kPi * .5f), scale({4, 2, 1})));
+        scene.objects.push_back(wall);
+        renderer.render(scene, size);
+        stateChecks();
+        CHECK(sample(capture(size), {.8f, 0, -12}) > 150);
+    }
+    settings.distantPlanarReflectionSize = 0;
+    checkThrows([&] { SceneRenderer invalid(settings); });
+    settings.distantPlanarReflectionSize = 64;
+    settings.distantPlanarReflectionUpdateSeconds = -1;
+    checkThrows([&] { SceneRenderer invalid(settings); });
+}
 } // namespace
 int main() {
     try {
@@ -343,6 +600,8 @@ int main() {
         worldChecks(window.drawableSize());
         planarChecks(window.drawableSize());
         distanceFadeChecks(window.drawableSize());
+        coverageChecks(window.drawableSize());
+        buildingCoverageChecks(window.drawableSize());
         std::cout << "Reflection tests passed: moving geometry, planar projection, glass blur, state and lifetime\n";
         return 0;
     } catch (const std::exception& error) {

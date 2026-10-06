@@ -57,10 +57,11 @@ The default footprint is two window tiles across and six along the street. Rando
 forecourts break up the street, with only some buildings close to the sidewalk. Footprint/floor controls and the
 `kStreet*` occupancy, mix and setback settings in `GameConfig.h` tune this layout; choices stay stable while scrolling.
 Empty frontage lots can contain pocket parks built from tiled `grass.png`, thin `spikedfence_decor.png` fences and the
-tree model. Parks reserve two building columns, with wider lawns and taller trees. Recessed brick buildings can have
+tree model. Parks reserve two building columns, with wider lawns and taller trees. Consecutive green lots join into
+continuous parks with fences only on exposed edges, shared grass tiling and tint, and multiple sidewalk entrances.
+Widths, outside corner notches and tree groups retain their seeded variation. Recessed brick buildings can have
 small planting beds flanking a clear door-to-sidewalk path. These beds meet the facade, trimming the final grass tile
-to fit and fencing only the exposed edges. Park widths, lengths, corner notches, entrances, grass tints
-and tree groups vary independently on each side; their seeded layouts remain stable as the road scrolls. The `kPark*`,
+to fit and fencing only the exposed edges. Layouts vary independently on each side and remain stable as the road scrolls. The `kPark*`,
 `kPocketParkChance`, `kGrassTileSize`, `kBrickGardenChance` and `kGarden*` settings in `GameConfig.h` control the layout.
 Fence gaps and canopy cutouts retain transparency in the scene, sun shadows and live window reflections.
 Generated material maps give grass rough tufts and recessed dirt, fences darker painted iron and smoother exposed metal,
@@ -77,17 +78,28 @@ Individual clouds have seeded random positions, elevations and sizes. Three grou
 curved sky dome, with a gentle concave bow and slow billowing that retains the PNG transparency and nearest sampling.
 At night, randomly placed stars fade in and twinkle behind the clouds, including in window reflections.
 `kSkyLayoutSeed`, the cloud scatter/curvature/warp settings and the `kNightStar*` settings tune these effects.
+The alpha texture `moon.png` shines above the skyline with a subtle halo. Its angular size preserves its proportions
+across camera distances and window shapes, and clouds pass in front of it. `kMoonSizeDegrees`, `kMoonBrightness` and
+`kMoonGlowStrength` tune its appearance; `kNightLightDirection` sets both its bearing and the moonlight shadow angle.
 Every 5,000 points
-alternates day and night through a rose-tinted dusk: each transition takes 30 seconds, including a six-second dusk hold.
+alternates day and night through a rose-tinted dusk: each transition takes 12 seconds, including a two-second dusk hold.
 Sky, clouds, fog, lighting and window reflections share the same continuous phase. Game over freezes the cycle; restart
 returns to daylight. `kDayNightScoreInterval`, `kDayNightTransitionSeconds`, `kDuskHoldSeconds` and the cloud/palette
-settings in `GameConfig.h` control the effect. The sky is sampled directly rather than generated into a cubemap.
+settings in `GameConfig.h` control the effect. Light direction also moves smoothly through the day, dusk and night
+directions, changing the projected shadows. The sky is sampled directly rather than generated into a cubemap.
 Building panes reflect the moving character, props, sidewalk and sky through live local captures in Normal and PSX modes.
 Coated glass and a darker backing make the reflected detail clearer, with roughness controlling blur. Captures use accurate
 mirrored-camera projection on each building; nearby coplanar facades share a capture.
-`RenderSettings::planarReflectionSize` (512), `maxPlanarReflections` (6) and `planarReflectionDistance` (70) control local
-capture quality and cost. `planarReflectionFadeDistance` (20) blends reflections out gradually from 50 to 70 units;
-capture priorities also blend at the budget limit. `worldReflectionMapSize` sets cubemap face resolution for procedural
+Every visible plane within `planarReflectionDistance` (120) retains a local reflection. `maxPlanarReflections` (6)
+sets the high-detail budget at `planarReflectionSize` (512); other faces use `distantPlanarReflectionSize` (128).
+Faces outside the priority budget also gain detail gradually from 90 to 35 units, reaching the same nearby resolution.
+`planarReflectionFadeDistance` (30) blends reflections out from 90 to 120 units. Faces belonging to the same building
+share their distance and activation fade (`planarReflectionBlendSeconds`, .25), so narrow sides appear with end faces.
+Nearby views (within 35 units) and high-detail captures update every frame. Other building views remain visible between
+staggered refreshes (`distantPlanarReflectionUpdateSeconds`, .2), with mapping adjusted for scrolling scenery.
+Buffers retain their allocations as crops shrink, PSX captures match its raster density, and authored skies skip the
+duplicate geometry depth pass. Hidden buildings and out-of-view props are culled, and shared lighting uniforms are
+uploaded once per view. `worldReflectionMapSize` sets cubemap face resolution for procedural
 skies (128; 0 disables world reflections), and
 `WindowMaterial::worldReflections` enables captures per facade. The distant probe follows the camera unless
 `Scene::reflectionProbePosition` overrides its position when the cubemap fallback is used.
