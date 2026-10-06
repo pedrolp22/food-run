@@ -10,6 +10,7 @@ uniform sampler2D uTexture;
 uniform float uLod;
 uniform float uAmbientLight;
 uniform float uAlpha;
+uniform float uAlphaCutoff;
 uniform float uAffine;
 uniform bool uReceivesShadow;
 uniform vec3 uColor;
@@ -39,7 +40,9 @@ uniform float uSkyPanoramaNight;
 
 void main() {
     vec2 tc = mix(vTexCoord, vAffineTexCoord, uAffine);
-    vec3 base = sampleSurfaceLod(uTexture, tc, uLod, vTexCoord).rgb;
+    vec4 texel = sampleSurfaceLod(uTexture, tc, uLod, vTexCoord);
+    if (texel.a < uAlphaCutoff) { discard; }
+    vec3 base = texel.rgb;
     // Authored masks decouple material identity from the albedo's blue palette.
     // Unmapped callers retain the scalar window finish and color-mask fallback.
     float glass = uHasGlassMap ? sampleMaterialData(uGlassMap, tc, vTexCoord, uMaxGlassLod).r
@@ -79,7 +82,11 @@ void main() {
     vec3 reflection = reflect(-view, normal);
     vec3 environment = reflectedEnvironment(reflection, normal, clamp(roughness, 0.08, 1.0));
     vec3 worldEnvironment = environment;
-    if (uHasSkyPanorama && glass > 0.0) {
+    if (uHasCloudSky && glass > 0.0) {
+        vec3 sky = linearColor(sampleCloudSky(reflection));
+        worldEnvironment = mix(environment, sky, smoothstep(-0.08, 0.04, reflection.y));
+    }
+    if (uHasSkyPanorama && !uHasCloudSky && glass > 0.0) {
         vec3 sky = linearColor(panoramaNight(samplePanorama(reflection), uSkyPanoramaNight));
         // The bitmap has no ground detail. Nearby streets and actors come from
         // the planar capture; retain the analytic ground farther away.

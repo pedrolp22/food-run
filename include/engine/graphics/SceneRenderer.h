@@ -22,7 +22,7 @@ struct RenderSettings {
     Color psxFogColor = {.74f, .86f, .97f}; // Custom daylight color when psxFogFollowsSky is false.
     Color psxNightFogColor = {.38f, .31f, .40f};
     bool psxFogFollowsSky = true; // Distance fade targets the regular horizon; does not recolor the sky/materials.
-    int worldReflectionMapSize = 128;    // Cubemap face size without a sky panorama; 0 disables all world reflections.
+    int worldReflectionMapSize = 128;    // Cubemap face size for procedural skies; 0 disables all world reflections.
     int planarReflectionSize = 512;      // Full-view longest side, cropped to the visible facade. 0 disables planar.
     int maxPlanarReflections = 6;        // Capture the most visible nearby facade planes each frame.
     float planarReflectionDistance = 70; // Maximum distance from the camera to a facade's nearest point.

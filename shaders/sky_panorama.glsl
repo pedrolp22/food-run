@@ -1,12 +1,13 @@
 // Mirror the upper-hemisphere bitmap horizontally to join nonmatching image edges.
 uniform sampler2D uPanorama;
+uniform float uPanoramaOffset;
 const float PANORAMA_PI = 3.14159265;
 
 vec2 panoramaUv(vec3 ray) {
     float longitude = dot(ray.xz, ray.xz) > 0.000001 ? atan(ray.x, -ray.z) : 0.0;
     // Compress elevation toward the horizon so sky artwork remains visible
     // in the game's downward-facing camera rather than exposing only its bottom row.
-    return vec2(longitude / PANORAMA_PI + 0.5, sqrt(clamp(ray.y, 0.0, 1.0)));
+    return vec2(longitude / PANORAMA_PI + 0.5 + uPanoramaOffset, sqrt(clamp(ray.y, 0.0, 1.0)));
 }
 
 vec3 samplePanorama(vec3 ray) {

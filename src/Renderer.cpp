@@ -95,9 +95,10 @@ void Renderer::renderMenu(const float time, const int selection) const {
     impl_->graphics.render(impl_->menuScene, impl_->drawable);
     impl_->window.swap();
 }
-void Renderer::render(const float playerX, const float roadScroll, const float gameTime, [[maybe_unused]] const int score,
-                      const std::span<const Entity> entities, const std::span<const CollectEffect> collectEffects,
-                      const float effectRemainder) const {
+void Renderer::render(const float playerX, const float roadScroll, const float gameTime,
+                      [[maybe_unused]] const int score, const std::span<const Entity> entities,
+                      const std::span<const CollectEffect> collectEffects, const float effectRemainder,
+                      const float nightBlend) const {
     if (!impl_) {
         return;
     }
@@ -105,7 +106,8 @@ void Renderer::render(const float playerX, const float roadScroll, const float g
     if (impl_->drawable.width <= 0 || impl_->drawable.height <= 0) {
         return;
     }
-    impl_->graphics.render(impl_->world.build(playerX, roadScroll, gameTime, entities, collectEffects, effectRemainder),
-                           impl_->drawable);
+    impl_->graphics.render(
+        impl_->world.build(playerX, roadScroll, gameTime, entities, collectEffects, effectRemainder, nightBlend),
+        impl_->drawable);
     impl_->window.swap();
 }

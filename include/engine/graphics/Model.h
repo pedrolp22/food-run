@@ -19,10 +19,14 @@ class Model {
         float occlusionStrength = 1;
         bool packedOcclusion = false;
         bool packedReflectivity = false;
+        float alphaCutoff = 0;
+        bool doubleSided = false;
         MaterialTextures textures() const {
             return {.properties = properties.id() ? &properties : nullptr,
                     .normal = normal.id() ? &normal : nullptr,
-                    .occlusion = occlusion.id() ? &occlusion : packedOcclusion ? &properties : nullptr,
+                    .occlusion = occlusion.id()    ? &occlusion
+                                 : packedOcclusion ? &properties
+                                                   : nullptr,
                     .normalScale = normalScale,
                     .occlusionStrength = occlusionStrength,
                     .packedReflectivity = packedReflectivity};

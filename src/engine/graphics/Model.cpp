@@ -14,15 +14,23 @@ Model::Model(const assets::ModelData& data) {
         primitive.material.normalScale = source.material.normalScale;
         primitive.material.occlusionStrength = source.material.occlusionStrength;
         primitive.material.packedReflectivity = source.material.packedReflectivity;
+        primitive.material.alphaCutoff = source.material.alphaCutoff;
+        primitive.material.doubleSided = source.material.doubleSided;
         if (!source.material.baseTexture.empty()) {
-            primitive.material.texture = Texture(source.material.baseTexture, {TextureFilter::Linear, false, false});
+            const auto filter = source.material.baseTextureNearest ? TextureFilter::Nearest : TextureFilter::Linear;
+            primitive.material.texture =
+                Texture(source.material.baseTexture, {filter, source.material.baseTextureRepeat, false});
         }
         if (!source.material.metallicRoughnessTexture.empty()) {
-            primitive.material.properties =
-                Texture(source.material.metallicRoughnessTexture, {TextureFilter::Trilinear});
+            // Generated companions share the base-color UVs, including atlas coordinates outside [0, 1].
+            primitive.material.properties = Texture(
+                source.material.metallicRoughnessTexture,
+                {TextureFilter::Trilinear, source.material.packedReflectivity && source.material.baseTextureRepeat});
         }
         if (!source.material.normalTexture.empty()) {
-            primitive.material.normal = Texture(source.material.normalTexture, {TextureFilter::Trilinear});
+            primitive.material.normal = Texture(
+                source.material.normalTexture,
+                {TextureFilter::Trilinear, source.material.packedReflectivity && source.material.baseTextureRepeat});
         }
         primitive.material.packedOcclusion =
             !source.material.occlusionTexture.empty() &&

@@ -10,13 +10,17 @@ struct MaterialData {
     std::array<float, 4> baseColor = {1, 1, 1, 1}; // Linear glTF baseColorFactor, not sRGB.
     std::filesystem::path baseTexture;
     float roughness = 1; // glTF perceptual roughnessFactor, in linear space.
-    float metallic = 1; // glTF metallicFactor defaults to 1, including when omitted.
+    float metallic = 1;  // glTF metallicFactor defaults to 1, including when omitted.
     std::filesystem::path metallicRoughnessTexture;
     std::filesystem::path normalTexture;
     std::filesystem::path occlusionTexture;
     float normalScale = 1;
     float occlusionStrength = 1;
     bool packedReflectivity = false; // Engine surface-map companions may use A; glTF imports leave it disabled.
+    float alphaCutoff = 0;           // glTF MASK cutoff; zero keeps the default opaque material.
+    bool doubleSided = false;
+    bool baseTextureNearest = false; // Preserve authored nearest sampling for pixel-art cutouts.
+    bool baseTextureRepeat = false;
 };
 struct PrimitiveData {
     std::vector<float> vertices;

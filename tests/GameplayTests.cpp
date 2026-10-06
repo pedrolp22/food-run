@@ -4,7 +4,58 @@
 
 using namespace game;
 using namespace GameConfig;
+namespace {
+void dayNightChecks() {
+    constexpr float travel = (kDayNightTransitionSeconds - kDuskHoldSeconds) * .5f;
+    DayNightCycle cycle;
+    CHECK(cycle.nightBlend() == 0);
+    cycle.update(kDayNightScoreInterval - 1, kDayNightTransitionSeconds);
+    CHECK(cycle.nightBlend() == 0); // Scoring below the milestone cannot start the transition.
+    cycle.update(kDayNightScoreInterval, 1.0f / 60);
+    CHECK(cycle.nightBlend() == 0); // A score milestone starts a fade rather than switching immediately.
+    cycle.update(kDayNightScoreInterval, travel * .5f);
+    const float fading = cycle.nightBlend();
+    CHECK(fading > 0 && fading < .5f);
+    CHECK(cycle.nightBlend(.01f) > fading && cycle.nightBlend() == fading); // Presentation interpolation is read-only.
+    cycle.update(kDayNightScoreInterval, travel * .5f);
+    CHECK(near(cycle.nightBlend(), .5f));
+    cycle.update(kDayNightScoreInterval, kDuskHoldSeconds);
+    CHECK(near(cycle.nightBlend(), .5f)); // A distinct rose dusk lasts for the configured hold.
+    cycle.update(kDayNightScoreInterval, travel);
+    CHECK(cycle.nightBlend() == 1);
+    cycle.update(kDayNightScoreInterval * 2 - 1, kDayNightTransitionSeconds);
+    CHECK(cycle.nightBlend() == 1); // Time alone does not toggle a completed night.
+    cycle.update(kDayNightScoreInterval * 2, 1.0f / 60);
+    CHECK(cycle.nightBlend() == 1);
+    cycle.update(kDayNightScoreInterval * 2, travel);
+    CHECK(near(cycle.nightBlend(), .5f));
+    cycle.update(kDayNightScoreInterval * 2, kDuskHoldSeconds);
+    CHECK(near(cycle.nightBlend(), .5f));
+    cycle.update(kDayNightScoreInterval * 2, travel);
+    CHECK(cycle.nightBlend() == 0); // The next milestone returns to daylight through the same dusk.
+    cycle.update(kDayNightScoreInterval * 3, 1.0f / 60);
+    cycle.update(kDayNightScoreInterval * 3, travel * .5f);
+    const float beforeRetarget = cycle.nightBlend();
+    cycle.update(kDayNightScoreInterval * 4, 1.0f / 60);
+    CHECK(cycle.nightBlend() == beforeRetarget); // Rapid score changes preserve the currently displayed phase.
+    cycle.update(kDayNightScoreInterval * 4, kDayNightTransitionSeconds);
+    CHECK(cycle.nightBlend() == 0);
+    cycle.update(kDayNightScoreInterval * 5, 0);
+    cycle.update(kDayNightScoreInterval * 5, std::numeric_limits<float>::quiet_NaN());
+    CHECK(cycle.nightBlend() == 0); // Frozen/invalid gameplay ticks do not advance the sky.
+    GameState pickup;
+    pickup.score = kDayNightScoreInterval - 50;
+    pickup.entities = {{EntityType::ScoreCollectible, 1, kPlayerZ}};
+    resolveCollisions(pickup);
+    pickup.dayNight.update(pickup.score, 1.0f / 60);
+    pickup.dayNight.update(pickup.score, kDayNightTransitionSeconds);
+    CHECK(pickup.dayNight.nightBlend() == 1); // Pickup points also count toward a milestone.
+    pickup = GameState{};
+    CHECK(pickup.dayNight.nightBlend() == 0); // Restart restores daylight and clears the previous milestone.
+}
+} // namespace
 void gameplayTests() {
+    dayNightChecks();
     CHECK(laneToX(-99) == kLanePositions.front());
     CHECK(laneToX(99) == kLanePositions.back());
     Simulation left(42);
@@ -83,6 +134,7 @@ void gameplayTests() {
         const auto& a = first.state();
         const auto& b = second.state();
         CHECK(a.score == b.score && a.gameOver == b.gameOver && a.playerX == b.playerX && a.time == b.time);
+        CHECK(a.dayNight.nightBlend() == b.dayNight.nightBlend());
         CHECK(a.entities.size() == b.entities.size());
         for (std::size_t i = 0; i < a.entities.size(); ++i) {
             CHECK(a.entities[i].type == b.entities[i].type && a.entities[i].z == b.entities[i].z &&

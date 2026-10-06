@@ -2,6 +2,7 @@
 
 #include "ShaderSources.h"
 #include "engine/graphics/ShaderProgram.h"
+#include <array>
 #include <string>
 
 namespace engine::graphics::detail {
@@ -9,6 +10,7 @@ inline const std::string litSource = std::string(shaders::fog_glsl) + std::strin
 inline const std::string litTextureSource = litSource + std::string(shaders::texture_filter_glsl);
 inline const std::string materialTextureSource =
     litTextureSource + std::string(shaders::material_glsl) + std::string(shaders::material_textures_glsl);
+inline const std::string skySource = std::string(shaders::sky_panorama_glsl) + std::string(shaders::sky_clouds_glsl);
 struct MaterialMapUniforms {
     int properties;
     int normal;
@@ -118,9 +120,40 @@ struct RippleProgram {
           burstProgress(shader.uniform("uBurstProgress")) {}
 };
 
+struct CloudSkyUniforms {
+    int enabled;
+    int topColor;
+    int horizonColor;
+    int cloudTint;
+    int seed;
+    int time;
+    int stars;
+    int twinkle;
+    std::array<int, 3> textures;
+    std::array<int, 3> layouts;
+    std::array<int, 3> settings;
+    std::array<int, 3> variation;
+    std::array<int, 3> warp;
+    explicit CloudSkyUniforms(const ShaderProgram& shader)
+        : enabled(shader.uniform("uHasCloudSky")), topColor(shader.uniform("uCloudSkyTop")),
+          horizonColor(shader.uniform("uCloudSkyHorizon")), cloudTint(shader.uniform("uCloudTint")),
+          seed(shader.uniform("uSkyLayoutSeed")), time(shader.uniform("uSkyEffectTime")),
+          stars(shader.uniform("uNightStars")), twinkle(shader.uniform("uStarTwinkle")) {
+        for (std::size_t index = 0; index < textures.size(); ++index) {
+            const auto suffix = "[" + std::to_string(index) + "]";
+            textures[index] = shader.uniform(("uCloudTextures" + suffix).c_str());
+            layouts[index] = shader.uniform(("uCloudLayouts" + suffix).c_str());
+            settings[index] = shader.uniform(("uCloudSettings" + suffix).c_str());
+            variation[index] = shader.uniform(("uCloudVariation" + suffix).c_str());
+            warp[index] = shader.uniform(("uCloudWarp" + suffix).c_str());
+        }
+    }
+};
+
 struct SkyProgram {
     ShaderProgram shader;
     int panorama;
+    int panoramaOffset;
     int hasPanorama;
     int topColor;
     int bottomColor;
@@ -138,9 +171,10 @@ struct SkyProgram {
     int tanHalfFov;
     int sunColor;
     int sunRadii;
+    CloudSkyUniforms clouds;
     SkyProgram()
-        : shader(shaders::sky_vert, shaders::sky_frag, "sky", shaders::sky_panorama_glsl),
-          panorama(shader.uniform("uPanorama")), hasPanorama(shader.uniform("uHasPanorama")),
+        : shader(shaders::sky_vert, shaders::sky_frag, "sky", skySource), panorama(shader.uniform("uPanorama")),
+          panoramaOffset(shader.uniform("uPanoramaOffset")), hasPanorama(shader.uniform("uHasPanorama")),
           topColor(shader.uniform("uTopColor")), bottomColor(shader.uniform("uBottomColor")),
           time(shader.uniform("uTime")), nightBlend(shader.uniform("uNightBlend")), sunDir(shader.uniform("uSunDir")),
           aspect(shader.uniform("uAspect")), rasterSize(shader.uniform("uRasterSize")),
@@ -148,7 +182,7 @@ struct SkyProgram {
           cameraForward(shader.uniform("uCameraForward")), cameraRight(shader.uniform("uCameraRight")),
           cameraUp(shader.uniform("uCameraUp")), cameraPosition(shader.uniform("uCameraPosition")),
           tanHalfFov(shader.uniform("uTanHalfFov")), sunColor(shader.uniform("uSunColor")),
-          sunRadii(shader.uniform("uSunRadii")) {}
+          sunRadii(shader.uniform("uSunRadii")), clouds(shader) {}
 };
 
 struct MenuProgram {
@@ -182,6 +216,7 @@ struct RoadProgram {
     int light;
     int ambientLight;
     int alpha;
+    int alphaCutoff;
     int time;
     int heat;
     int affine;
@@ -201,10 +236,10 @@ struct RoadProgram {
           textureRepeat(shader.uniform("uTextureRepeat")), maxTextureLod(shader.uniform("uMaxTextureLod")),
           psxMinification(shader.uniform("uPsxMinification")), psxLodBias(shader.uniform("uPsxLodBias")),
           lod(shader.uniform("uLod")), light(shader.uniform("uLight")), ambientLight(shader.uniform("uAmbientLight")),
-          alpha(shader.uniform("uAlpha")), time(shader.uniform("uTime")), heat(shader.uniform("uHeat")),
-          affine(shader.uniform("uAffine")), receivesShadow(shader.uniform("uReceivesShadow")),
-          color(shader.uniform("uColor")), shadowMap(shader.uniform("uShadowMap")),
-          shadowDitherStrength(shader.uniform("uShadowDitherStrength")),
+          alpha(shader.uniform("uAlpha")), alphaCutoff(shader.uniform("uAlphaCutoff")), time(shader.uniform("uTime")),
+          heat(shader.uniform("uHeat")), affine(shader.uniform("uAffine")),
+          receivesShadow(shader.uniform("uReceivesShadow")), color(shader.uniform("uColor")),
+          shadowMap(shader.uniform("uShadowMap")), shadowDitherStrength(shader.uniform("uShadowDitherStrength")),
           ditheredShadows(shader.uniform("uDitheredShadows")),
           ditheredShadowDarkness(shader.uniform("uDitheredShadowDarkness")) {}
 };
@@ -217,6 +252,7 @@ struct SkyscraperProgram {
     int lightViewProj;
     int texScale;
     int texOffset;
+    int facadeVerticalRange;
     int snap;
     int snapStrength;
     int fogRange;
@@ -229,6 +265,7 @@ struct SkyscraperProgram {
     int lod;
     int ambientLight;
     int alpha;
+    int alphaCutoff;
     int affine;
     int receivesShadow;
     int color;
@@ -261,25 +298,28 @@ struct SkyscraperProgram {
     int windowReflectance;
     int windowBackingTint;
     int panorama;
+    int panoramaOffset;
     int hasSkyPanorama;
     int skyPanoramaNight;
     int haze;
     int hazeColor;
     MaterialMapUniforms maps;
+    CloudSkyUniforms clouds;
     SkyscraperProgram()
-        : shader(shaders::skyscraper_vert, shaders::skyscraper_frag, "skyscraper",
-                 materialTextureSource + std::string(shaders::sky_panorama_glsl), shaders::vertex_snap_glsl),
+        : shader(shaders::skyscraper_vert, shaders::skyscraper_frag, "skyscraper", materialTextureSource + skySource,
+                 shaders::vertex_snap_glsl),
           mvp(shader.uniform("uMvp")), model(shader.uniform("uModel")),
           reflectionClipPlane(shader.uniform("uReflectionClipPlane")), lightViewProj(shader.uniform("uLightViewProj")),
-          texScale(shader.uniform("uTexScale")), texOffset(shader.uniform("uTexOffset")), snap(shader.uniform("uSnap")),
+          texScale(shader.uniform("uTexScale")), texOffset(shader.uniform("uTexOffset")),
+          facadeVerticalRange(shader.uniform("uFacadeVerticalRange")), snap(shader.uniform("uSnap")),
           snapStrength(shader.uniform("uSnapStrength")), fogRange(shader.uniform("uFogRange")),
           fogColor(shader.uniform("uFogColor")), texture(shader.uniform("uTexture")),
           textureRepeat(shader.uniform("uTextureRepeat")), maxTextureLod(shader.uniform("uMaxTextureLod")),
           psxMinification(shader.uniform("uPsxMinification")), psxLodBias(shader.uniform("uPsxLodBias")),
           lod(shader.uniform("uLod")), ambientLight(shader.uniform("uAmbientLight")), alpha(shader.uniform("uAlpha")),
-          affine(shader.uniform("uAffine")), receivesShadow(shader.uniform("uReceivesShadow")),
-          color(shader.uniform("uColor")), shadowMap(shader.uniform("uShadowMap")),
-          shadowDitherStrength(shader.uniform("uShadowDitherStrength")),
+          alphaCutoff(shader.uniform("uAlphaCutoff")), affine(shader.uniform("uAffine")),
+          receivesShadow(shader.uniform("uReceivesShadow")), color(shader.uniform("uColor")),
+          shadowMap(shader.uniform("uShadowMap")), shadowDitherStrength(shader.uniform("uShadowDitherStrength")),
           ditheredShadows(shader.uniform("uDitheredShadows")),
           ditheredShadowDarkness(shader.uniform("uDitheredShadowDarkness")), faceNormal(shader.uniform("uFaceNormal")),
           sunDir(shader.uniform("uSunDir")), cameraPosition(shader.uniform("uCameraPosition")),
@@ -299,8 +339,9 @@ struct SkyscraperProgram {
           planarReflectionStrength(shader.uniform("uPlanarReflectionStrength")),
           windowReflectance(shader.uniform("uWindowReflectance")),
           windowBackingTint(shader.uniform("uWindowBackingTint")), panorama(shader.uniform("uPanorama")),
-          hasSkyPanorama(shader.uniform("uHasSkyPanorama")), skyPanoramaNight(shader.uniform("uSkyPanoramaNight")),
-          haze(shader.uniform("uHaze")), hazeColor(shader.uniform("uHazeColor")), maps(shader) {}
+          panoramaOffset(shader.uniform("uPanoramaOffset")), hasSkyPanorama(shader.uniform("uHasSkyPanorama")),
+          skyPanoramaNight(shader.uniform("uSkyPanoramaNight")), haze(shader.uniform("uHaze")),
+          hazeColor(shader.uniform("uHazeColor")), maps(shader), clouds(shader) {}
 };
 
 struct MaterialProgram {
@@ -343,6 +384,9 @@ struct MaterialProgram {
     int receivesShadow;
     int affine;
     int alpha;
+    int alphaCutoff;
+    int baseAlpha;
+    int doubleSided;
     int haze;
     int time;
     int heat;
@@ -369,8 +413,9 @@ struct MaterialProgram {
           ditheredShadows(shader.uniform("uDitheredShadows")),
           ditheredShadowDarkness(shader.uniform("uDitheredShadowDarkness")),
           receivesShadow(shader.uniform("uReceivesShadow")), affine(shader.uniform("uAffine")),
-          alpha(shader.uniform("uAlpha")), haze(shader.uniform("uHaze")), time(shader.uniform("uTime")),
-          heat(shader.uniform("uHeat")), maps(shader) {}
+          alpha(shader.uniform("uAlpha")), alphaCutoff(shader.uniform("uAlphaCutoff")),
+          baseAlpha(shader.uniform("uBaseAlpha")), doubleSided(shader.uniform("uDoubleSided")),
+          haze(shader.uniform("uHaze")), time(shader.uniform("uTime")), heat(shader.uniform("uHeat")), maps(shader) {}
 };
 
 struct ModelProgram {
@@ -386,6 +431,9 @@ struct ModelProgram {
     int texture;
     int baseColor;
     int hasTexture;
+    int alphaCutoff;
+    int baseAlpha;
+    int doubleSided;
     int sunDir;
     int ambient;
     int affine;
@@ -401,8 +449,9 @@ struct ModelProgram {
           snap(shader.uniform("uSnap")), snapStrength(shader.uniform("uSnapStrength")),
           fogRange(shader.uniform("uFogRange")), fogColor(shader.uniform("uFogColor")),
           texture(shader.uniform("uTexture")), baseColor(shader.uniform("uBaseColor")),
-          hasTexture(shader.uniform("uHasTexture")), sunDir(shader.uniform("uSunDir")),
-          ambient(shader.uniform("uAmbient")), affine(shader.uniform("uAffine")),
+          hasTexture(shader.uniform("uHasTexture")), alphaCutoff(shader.uniform("uAlphaCutoff")),
+          baseAlpha(shader.uniform("uBaseAlpha")), doubleSided(shader.uniform("uDoubleSided")),
+          sunDir(shader.uniform("uSunDir")), ambient(shader.uniform("uAmbient")), affine(shader.uniform("uAffine")),
           vertexLighting(shader.uniform("uVertexLighting")), shadowMap(shader.uniform("uShadowMap")),
           shadowDitherStrength(shader.uniform("uShadowDitherStrength")),
           ditheredShadows(shader.uniform("uDitheredShadows")),
@@ -464,10 +513,17 @@ struct ShadowProgram {
     int texture;
     int textured;
     int opacity;
+    int alphaCutoff;
+    int baseAlpha;
+    int modelMesh;
+    int texScale;
+    int texOffset;
     ShadowProgram()
         : shader(shaders::shadow_vert, shaders::shadow_frag, "shadow"), mvp(shader.uniform("uMvp")),
           texture(shader.uniform("uTexture")), textured(shader.uniform("uTextured")),
-          opacity(shader.uniform("uOpacity")) {}
+          opacity(shader.uniform("uOpacity")), alphaCutoff(shader.uniform("uAlphaCutoff")),
+          baseAlpha(shader.uniform("uBaseAlpha")), modelMesh(shader.uniform("uModelMesh")),
+          texScale(shader.uniform("uTexScale")), texOffset(shader.uniform("uTexOffset")) {}
 };
 
 struct Programs {

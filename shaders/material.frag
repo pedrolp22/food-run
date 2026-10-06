@@ -20,6 +20,9 @@ uniform bool uVertexLighting;
 uniform bool uReceivesShadow;
 uniform float uAffine;
 uniform float uAlpha;
+uniform float uAlphaCutoff;
+uniform float uBaseAlpha;
+uniform bool uDoubleSided;
 uniform float uHaze;
 uniform float uTime;
 uniform float uHeat;
@@ -34,18 +37,24 @@ void main() {
     }
     vec3 texel = vec3(1.0);
     if (uHasTexture) {
-        texel = uLod < 0.0 ? sampleSurface(uTexture, tc).rgb : sampleSurfaceLod(uTexture, tc, uLod, vTexCoord).rgb;
+        vec4 sampleColor = uLod < 0.0 ? sampleSurface(uTexture, tc) : sampleSurfaceLod(uTexture, tc, uLod, vTexCoord);
+        if (sampleColor.a * uBaseAlpha < uAlphaCutoff) { discard; }
+        texel = sampleColor.rgb;
+    } else if (uBaseAlpha < uAlphaCutoff) {
+        discard;
     }
     // glTF factors are linear; game colors and base-color textures use sRGB.
     vec3 albedo = linearColor(texel) * (uColorIsLinear ? uColor : linearColor(uColor));
     vec3 geometricNormal = normalize(vNormal);
+    bool backFace = uDoubleSided && !gl_FrontFacing;
+    if (backFace) { geometricNormal = -geometricNormal; }
     vec3 normal = materialNormal(tc, vTexCoord, geometricNormal, vWorldPosition);
     vec3 properties = materialProperties(tc, vTexCoord);
     float occlusion = materialOcclusion(tc, vTexCoord);
     float noL = max(dot(normal, normalize(uSunDir)), 0.0);
     float ambient = clamp(uAmbient * (0.95 + 0.30 * normal.y), 0.0, 1.0);
-    vec2 shade = uVertexLighting ? vVertexLight : vec2(ambient, (1.0 - ambient) * noL);
-    if (uVertexLighting && uHasNormalMap) {
+    vec2 shade = uVertexLighting && !backFace ? vVertexLight : vec2(ambient, (1.0 - ambient) * noL);
+    if (uVertexLighting && uHasNormalMap && !backFace) {
         float geometricLight = max(dot(geometricNormal, normalize(uSunDir)), 0.0);
         shade.y = max(shade.y + (1.0 - ambient) * (noL - geometricLight), 0.0);
     }

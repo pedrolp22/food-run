@@ -26,7 +26,7 @@ void stateChecks() {
     CHECK(value == 0);
     glGetIntegerv(GL_ACTIVE_TEXTURE, &value);
     CHECK(value == GL_TEXTURE0);
-    for (int unit = 0; unit <= 8; ++unit) {
+    for (int unit = 0; unit <= 11; ++unit) {
         glGetIntegeri_v(GL_SAMPLER_BINDING, unit, &value);
         CHECK(value == 0);
     }

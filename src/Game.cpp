@@ -46,7 +46,7 @@ int Game::run() {
         // Freeze at the final simulation time on game over; resetGame also clears the remainder.
         const float visualTime = state.time + (state.gameOver ? 0 : clock_.remainder());
         renderer_.render(state.playerX, state.roadScroll, visualTime, state.score, state.entities, state.collectEffects,
-                         clock_.remainder());
+                         clock_.remainder(), state.dayNight.nightBlend(state.gameOver ? 0 : clock_.remainder()));
     }
     return 0;
 }

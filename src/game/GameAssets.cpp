@@ -15,21 +15,32 @@ struct ModelSpec {
     const char* directory;
     float height;
 };
-constexpr std::array textures = {TextureSpec{TextureId::Road, "road.png", true, true},
-                                 TextureSpec{TextureId::Skyscraper, "skyscraper.png", false, true},
-                                 TextureSpec{TextureId::Wall, "wall_brick.png", true, true},
-                                 TextureSpec{TextureId::Water, "water.png", false},
-                                 TextureSpec{TextureId::Salad, "salad.png", false},
-                                 TextureSpec{TextureId::Salmon, "salmon.png", false},
-                                 TextureSpec{TextureId::Soda, "soda.png", false},
-                                 TextureSpec{TextureId::Burger, "burger.png", false},
-                                 TextureSpec{TextureId::Fries, "fries.png", false},
-                                 TextureSpec{TextureId::Sidewalk, "sidewalk.png", true, true},
-                                 TextureSpec{TextureId::BuildingTop, "building_top.png", false, true},
-                                 TextureSpec{TextureId::Skybox, "skybox.png", false}};
-constexpr std::array models = {
-    ModelSpec{ModelId::Cone, "traffic_cone", 1.0f}, ModelSpec{ModelId::Barrier, "barrier", 0.9f},
-    ModelSpec{ModelId::TrashCan, "trash_can", 0.75f}, ModelSpec{ModelId::Bench, "bench", 0.7f}};
+constexpr std::array textures = {
+    TextureSpec{TextureId::Road, "textures/road.png", true, true},
+    TextureSpec{TextureId::Skyscraper, "textures/skyscraper/skyscraper.png", false, true},
+    TextureSpec{TextureId::Wall, "wall_brick.png", true, true},
+    TextureSpec{TextureId::Water, "textures/collectibles/water.png", false},
+    TextureSpec{TextureId::Salad, "textures/collectibles/salad.png", false},
+    TextureSpec{TextureId::Salmon, "textures/collectibles/salmon.png", false},
+    TextureSpec{TextureId::Soda, "textures/collectibles/soda.png", false},
+    TextureSpec{TextureId::Burger, "textures/collectibles/burger.png", false},
+    TextureSpec{TextureId::Fries, "textures/collectibles/fries.png", false},
+    TextureSpec{TextureId::Sidewalk, "textures/sidewalk.png", true, true},
+    TextureSpec{TextureId::BuildingTop, "textures/skyscraper/building_top.png", false, true},
+    TextureSpec{TextureId::Skybox, "textures/sky/skybox.png", false},
+    TextureSpec{TextureId::Cloud1, "textures/sky/cloud1.png", false},
+    TextureSpec{TextureId::Cloud2, "textures/sky/cloud2.png", false},
+    TextureSpec{TextureId::Cloud3, "textures/sky/cloud3.png", false},
+    TextureSpec{TextureId::BrickWindow, "textures/brick_building/brick_building_window.png", true, true},
+    TextureSpec{TextureId::BrickWall, "textures/brick_building/brick_building_wall.png", true, true},
+    TextureSpec{TextureId::BrickDoor, "textures/brick_building/brick_building_door.png", false, true},
+    TextureSpec{TextureId::Grass, "textures/grassy/grass.png", true, true},
+    TextureSpec{TextureId::Fence, "textures/grassy/spikedfence_decor.png", true, true},
+    TextureSpec{TextureId::Leaf, "textures/grassy/leaf.png", false, true}};
+constexpr std::array models = {ModelSpec{ModelId::Cone, "traffic_cone", 1.0f},
+                               ModelSpec{ModelId::Barrier, "barrier", 0.9f},
+                               ModelSpec{ModelId::TrashCan, "trash_can", 0.75f},
+                               ModelSpec{ModelId::Bench, "bench", 0.7f}, ModelSpec{ModelId::Tree, "tree", 1.0f}};
 static_assert(textures.size() == static_cast<std::size_t>(TextureId::Count));
 static_assert(models.size() == static_cast<std::size_t>(ModelId::Count));
 TextureId collectibleTexture(const Entity& entity) {
@@ -43,9 +54,11 @@ GameAssets::GameAssets(const std::filesystem::path& root, bool mipmapped) {
     for (const auto& asset : textures) {
         const auto index = static_cast<std::size_t>(asset.id);
         const bool collectible = asset.id >= TextureId::Water && asset.id <= TextureId::Fries;
-        const auto filter = !mipmapped || asset.id == TextureId::Skybox ? TextureFilter::Nearest
-                            : asset.materialDetail                      ? TextureFilter::Trilinear
-                                                                        : TextureFilter::Mipmapped;
+        const bool skyTexture =
+            asset.id == TextureId::Skybox || (asset.id >= TextureId::Cloud1 && asset.id <= TextureId::Cloud3);
+        const auto filter = !mipmapped || skyTexture || asset.id == TextureId::Leaf ? TextureFilter::Nearest
+                            : asset.materialDetail                                  ? TextureFilter::Trilinear
+                                                                                    : TextureFilter::Mipmapped;
         textures_[index] = Texture(root / asset.file, {filter, asset.repeat, true, collectible});
         if (asset.materialDetail) {
             const auto stem = std::filesystem::path(asset.file).stem().string();
@@ -53,7 +66,7 @@ GameAssets::GameAssets(const std::filesystem::path& root, bool mipmapped) {
                 Texture(root / "materials" / (stem + "_surface.png"), {TextureFilter::Trilinear, asset.repeat, true});
             normalMaps_[index] =
                 Texture(root / "materials" / (stem + "_normal.png"), {TextureFilter::Trilinear, asset.repeat, true});
-            if (asset.id == TextureId::Skyscraper) {
+            if (asset.id == TextureId::Skyscraper || asset.id == TextureId::BrickWindow) {
                 glassMaps_[index] =
                     Texture(root / "materials" / (stem + "_glass.png"), {TextureFilter::Trilinear, asset.repeat, true});
             }
@@ -79,6 +92,15 @@ GameAssets::GameAssets(const std::filesystem::path& root, bool mipmapped) {
                     material.occlusionTexture = companion;
                 }
             }
+            const auto normalCompanion =
+                material.baseTexture.parent_path() / (material.baseTexture.stem().string() + "_normal.png");
+            if (!material.baseTexture.empty() && material.normalTexture.empty() &&
+                std::filesystem::exists(normalCompanion)) {
+                material.normalTexture = normalCompanion;
+                if (asset.id == ModelId::Tree) {
+                    material.normalScale = GameConfig::kTreeNormalScale;
+                }
+            }
         }
         models_[static_cast<std::size_t>(asset.id)] = Model(data);
     }
@@ -97,6 +119,10 @@ MaterialTextures GameAssets::materialTextures(TextureId id) const {
     return {.properties = properties.id() ? &properties : nullptr,
             .normal = normal.id() ? &normal : nullptr,
             .occlusion = properties.id() ? &properties : nullptr,
+            .normalScale = id == TextureId::Grass   ? GameConfig::kGrassNormalScale
+                           : id == TextureId::Fence ? GameConfig::kFenceNormalScale
+                           : id == TextureId::Leaf  ? GameConfig::kLeafNormalScale
+                                                    : 1,
             .packedReflectivity = true,
             .glass = glass.id() ? &glass : nullptr};
 }

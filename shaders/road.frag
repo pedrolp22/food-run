@@ -9,6 +9,7 @@ uniform float uLod;
 uniform float uLight;
 uniform float uAmbientLight;
 uniform float uAlpha;
+uniform float uAlphaCutoff;
 uniform float uTime;
 uniform float uHeat;
 uniform float uAffine;
@@ -27,6 +28,8 @@ void main() {
         heatBoost = 0.04 * uHeat * sin(uTime * 4.2 + vTexCoord.y * 3.0);
     }
     float light = uReceivesShadow ? shadowedLight(uLight, uAmbientLight) : uLight;
-    vec3 surface = sampleSurfaceLod(uTexture, tc, uLod, vTexCoord).rgb * uColor * light * (1.0 + heatBoost);
+    vec4 texel = sampleSurfaceLod(uTexture, tc, uLod, vTexCoord);
+    if (texel.a < uAlphaCutoff) { discard; }
+    vec3 surface = texel.rgb * uColor * light * (1.0 + heatBoost);
     FragColor = vec4(distanceFog(surface), uAlpha);
 }

@@ -24,8 +24,9 @@ void WorldScene::addModel(const Model& model, const Transform& transform) {
     command.pbrSurface = true;
     scene_.objects.emplace_back(command);
 }
-void WorldScene::addTexturedQuad(const Texture& texture, const Transform& transform, Face face, float texScaleU,
-                                 float texScaleV, Vec3 normal, float alpha, bool skyscraperWindows, bool buildingSurface) {
+Quad& WorldScene::addTexturedQuad(const Texture& texture, const Transform& transform, Face face, float texScaleU,
+                                  float texScaleV, Vec3 normal, float alpha, bool skyscraperWindows,
+                                  bool buildingSurface) {
     const Mat4 rotation = face == Face::Side  ? rotateY(kPi * 0.5f)
                           : face == Face::Top ? rotateX(kPi * 0.5f)
                                               : identity();
@@ -36,7 +37,8 @@ void WorldScene::addTexturedQuad(const Texture& texture, const Transform& transf
     command.materialTextures = assets_.materialTextures(texture);
     if (buildingSurface && command.materialTextures.properties) {
         // Facade maps define glass and masonry directly, including future metal trim.
-        command.surfaceMaterial = {1, command.materialTextures.glass ? 1.0f : 0.0f, 1};
+        const bool mappedMetal = command.materialTextures.glass || &texture == &assets_.texture(TextureId::BrickDoor);
+        command.surfaceMaterial = {1, mappedMetal ? 1.0f : 0.0f, 1};
     }
     command.normal = normal;
     command.textureScale = {texScaleU, texScaleV};
@@ -46,6 +48,7 @@ void WorldScene::addTexturedQuad(const Texture& texture, const Transform& transf
     command.buildingSurface = buildingSurface;
     command.skyscraperWindows = skyscraperWindows;
     scene_.objects.emplace_back(command);
+    return std::get<Quad>(scene_.objects.back());
 }
 void WorldScene::addColoredQuad(Color color, const Transform& transform, Face face, Vec3 normal, float alpha,
                                 bool receivesShadow, bool followsGround) {

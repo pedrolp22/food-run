@@ -468,6 +468,12 @@ ModelData loadModel(const std::filesystem::path& path, float targetHeight) {
             if (const JsonValue* materialNode = primitive->obj("material")) {
                 const JsonValue* material = materials ? materials->at(materialNode->asInt(0)) : nullptr;
                 if (material) {
+                    if (const auto* mode = material->obj("alphaMode"); mode && mode->string == "MASK") {
+                        data.material.alphaCutoff = materialFactor(*material, "alphaCutoff", .5f);
+                    }
+                    if (const auto* sided = material->obj("doubleSided")) {
+                        data.material.doubleSided = sided->type == JsonValue::Type::Bool && sided->boolean;
+                    }
                     const JsonValue* pbr = material->obj("pbrMetallicRoughness");
                     if (pbr) {
                         data.material.roughness = materialFactor(*pbr, "roughnessFactor", 1);
@@ -480,6 +486,17 @@ ModelData loadModel(const std::filesystem::path& path, float targetHeight) {
                             data.material.baseColor[3] = colorFactor->at(3)->asFloat(1.0f);
                         }
                         data.material.baseTexture = materialTexturePath(root, pbr->obj("baseColorTexture"), baseDir);
+                        if (const auto* info = pbr->obj("baseColorTexture")) {
+                            const auto* textures = root.obj("textures");
+                            const auto* texture = textures ? textures->at(integer(*info, "index")) : nullptr;
+                            const auto* samplers = root.obj("samplers");
+                            const auto* sampler =
+                                texture && samplers ? samplers->at(integer(*texture, "sampler")) : nullptr;
+                            data.material.baseTextureNearest = sampler && integer(*sampler, "magFilter") == 9728 &&
+                                                               integer(*sampler, "minFilter") == 9728;
+                            data.material.baseTextureRepeat = !sampler || (integer(*sampler, "wrapS", 10497) == 10497 &&
+                                                                           integer(*sampler, "wrapT", 10497) == 10497);
+                        }
                         data.material.metallicRoughnessTexture =
                             materialTexturePath(root, pbr->obj("metallicRoughnessTexture"), baseDir);
                     }

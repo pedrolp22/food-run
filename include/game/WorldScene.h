@@ -3,7 +3,10 @@
 #include "engine/graphics/Scene.h"
 #include "engine/math/TrackCurve.h"
 #include "game/GameAssets.h"
+#include <cstdint>
+#include <optional>
 #include <span>
+#include <unordered_map>
 
 namespace game {
 // Builds game scenery once per frame. It never issues GL calls or owns a graphics context.
@@ -11,8 +14,8 @@ class WorldScene {
   public:
     explicit WorldScene(const GameAssets& assets);
     const engine::graphics::Scene& build(float playerX, float roadScroll, float gameTime,
-                                       std::span<const Entity> entities, std::span<const CollectEffect> effects,
-                                       float effectRemainder = 0);
+                                         std::span<const Entity> entities, std::span<const CollectEffect> effects,
+                                         float effectRemainder = 0, float nightBlend = 0);
 
   private:
     enum class Face { FrontBack, Side, Top };
@@ -22,15 +25,39 @@ class WorldScene {
     };
     void addGround(float scroll);
     void addBuildings(float scroll);
+    void addBrickFacade(const Transform& transform, Face face, engine::math::Vec3 normal, float fade, bool windows,
+                        bool door);
     void addSidewalk(float scroll);
+    void addParks(float scroll);
+    void addBrickGarden(float side, float facadeX, float centerZ, float depth, unsigned int seed);
+    void addGrassPatch(float side, float innerX, float startZ, int columns, int rows, unsigned int seed, bool notched,
+                       bool fenced, bool entrance, std::optional<engine::math::Vec2> buildingWall = std::nullopt);
+    void addLeaves(float playerX, float scroll);
+    struct TreeEmitter {
+        std::uint64_t id;
+        engine::math::Vec3 position;
+        float height;
+        unsigned int seed;
+    };
+    struct LiftedLeaf {
+        float time;
+        float baseZ;
+        float speed;
+    };
+    std::vector<TreeEmitter> trees_;
+    std::unordered_map<std::uint64_t, LiftedLeaf> liftedLeaves_;
+    float previousLeafTime_ = -1;
+    float previousLeafScroll_ = 0;
+    float previousLeafPlayerX_ = 0;
     void addDecor(float scroll);
     void addEntities(std::span<const Entity> entities);
     void addEffect(const CollectEffect& effect, float effectRemainder);
     void addCube(const Transform& transform, Color color, bool followsGround = false);
     void addModel(const engine::graphics::Model& model, const Transform& transform);
-    void addTexturedQuad(const engine::graphics::Texture& texture, const Transform& transform, Face face,
-                         float texScaleU, float texScaleV, engine::math::Vec3 normal, float alpha = 1,
-                         bool skyscraperWindows = false, bool buildingSurface = false);
+    engine::graphics::Quad& addTexturedQuad(const engine::graphics::Texture& texture, const Transform& transform,
+                                            Face face, float texScaleU, float texScaleV, engine::math::Vec3 normal,
+                                            float alpha = 1, bool skyscraperWindows = false,
+                                            bool buildingSurface = false);
     void addColoredQuad(Color color, const Transform& transform, Face face, engine::math::Vec3 normal, float alpha = 1,
                         bool receivesShadow = true, bool followsGround = false);
     engine::graphics::Sprite makeCollectibleSprite(const Entity& entity, float animationTime) const;

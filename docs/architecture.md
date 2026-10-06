@@ -9,6 +9,11 @@ Collection feedback has its own elapsed age and receives the fractional timestep
 can finish smoothly while gameplay is frozen.
 `Simulation` and the domain types under `include/game/` have no renderer or SDL dependency.
 An explicit random seed allows reproducible simulation within the same standard-library implementation.
+`GameState::dayNight` starts in daylight. `Simulation` checks distance and pickup points after each scoring update:
+every 5,000 points alternates the target between night and day. `DayNightCycle` eases to rose dusk, holds it for six seconds,
+then eases to the target, taking 30 seconds in total. These values are set in `GameConfig.h`. Rapid milestone changes
+retarget from the current phase without a jump. Presentation samples the fixed-step remainder without mutating the cycle;
+game over freezes it and restart clears it along with the score.
 
 `Renderer` coordinates a window, the graphics renderer, game assets, and a `WorldScene` builder. Its implementation
 is private, so consumers of `Renderer.h` do not include SDL, GLAD, shader locations, or GPU resource definitions.
@@ -48,7 +53,7 @@ The provided `Window` performs that initialization and requests a core OpenGL 3.
 
 The renderer controls GL state during a frame. It renders to framebuffer zero and returns with depth testing and
 alpha blending enabled, depth writes enabled, polygon offset disabled, the default framebuffer bound,
-texture unit zero active, and no shader program, VAO, or sampler on units zero through five bound. Multisampling is enabled;
+texture unit zero active, and no shader program, VAO, or sampler on units zero through eleven bound. Multisampling is enabled;
 alpha-to-coverage, sample coverage, and sample masking are disabled. It does not preserve arbitrary caller GL state.
 Applications with an additional UI/rendering pass should set that pass's state explicitly.
 
@@ -81,15 +86,27 @@ retaining the primitive's maps.
 
 The game loads `assets/materials/*_surface.png` (R occlusion, G roughness, B metallic multiplier, A reflectivity) and
 matching `*_normal.png` files. Road, sidewalk, brick and roof roughness/reflectivity factors are one so their maps define
-the finish directly; their metallic factor is zero.
-For textured models without authored metallic/roughness maps, the game catalog uses adjacent `*_surface.png`
-companions if present. `scripts/generate_material_maps.py` builds these numerical maps from the unchanged source palettes;
+the finish directly. Streets, plain brick and roofs use a zero metallic factor; mapped window facades and brick doors
+use a factor of one, with their property maps limiting metallic response to metal texels.
+For textured models without authored metallic/roughness or normal maps, the game catalog uses adjacent `*_surface.png`
+and `*_normal.png` companions if present. Generated model companions share the base texture's wrapping, preserving
+the tree atlas's UV coordinates slightly outside its bounds. Authored maps and imported finish factors remain in use.
+`scripts/generate_material_maps.py` builds these numerical maps from the unchanged source palettes;
 Pillow is only needed to regenerate them. Surface-map generation is deterministic and has no animated noise.
 Road relief separates black tar pits, dark aggregate and thin paint; sidewalk relief recesses slab joints and raises
 stone grains. Their `*_height.png` files expose the generator's intermediate relief for inspection; lighting uses the
 matching tangent-space normal maps. The default street normal strength is 3.0; override it with `--normal-strength`,
 or adjust `MaterialTextures::normalScale` at runtime. Street relief wraps at both texture borders, and the green normal
 channel accounts for the loader's vertical image flip.
+
+Grass, fence and leaf quads use matching property and normal maps from `assets/materials/`. Grass separates rough tufts
+from shallow dirt crevices. Fence paint is dielectric, while brighter exposed iron uses metallic response and lower
+roughness. Leaves have subtle waxy reflectivity and vein relief. The tree's companion maps distinguish foliage from
+rough bark grooves; their normal-map Y direction follows the unflipped glTF UVs. All four profiles also write height maps.
+The generator ignores transparent neighbors when deriving relief gradients and emits neutral data in transparent texels,
+so alpha cutouts do not introduce raised edges or dark occlusion rims. Maps share the color UV tiling, offsets and clipping,
+including partial tiles where front gardens meet buildings. `kGrassNormalScale`, `kFenceNormalScale`, `kLeafNormalScale`
+and `kTreeNormalScale` tune the game defaults; generated finishes define grass, fence and leaf roughness/reflectivity directly.
 
 Skyscrapers also load `skyscraper_glass.png`: its linear R channel marks the glass coat (1) and masonry frames (0).
 `MaterialTextures::glass` exposes that mask to facade commands. With both a glass mask and a property map, every texel's
@@ -101,11 +118,41 @@ The generator detects connected blue pane regions in the source texture, gives t
 recessed edge detail, and adds restrained masonry wear. Glass and masonry use zero metallic values; the map's B channel
 can be authored for metal trim. These data maps keep their native precision through lighting before final retro color conversion.
 
+Brick buildings use the tileable `brick_building_window.png` and `brick_building_wall.png`, plus the single entrance
+`brick_building_door.png`. Front and street-facing sides receive complete window tiles, preserving their source aspect;
+rear and outward sides, facade margins and roof bands use plain brick. `GameConfig::kBrickFacadeTileWidth` sets
+their world size (1.8 units). Brick footprints use whole tiles: the default `kBrickBuildingWidthTiles` (2) and
+`kBrickBuildingDepthTiles` (6) produce a 3.6-by-10.8-unit building with six window bays along the street. Heights alternate
+between `kBrickBuildingMinFloors` and `kBrickBuildingMaxFloors` (3–4), with whole floor heights derived from the window
+texture's aspect and a `kBrickBuildingRoofBandHeight` (0.18) above them. Brick lots have no lateral or longitudinal jitter.
+The frontage row uses stable per-lot random choices. `kStreetBuildingChance` (0.68) controls occupancy; empty lots reveal
+the scenery behind them. Occupied lots use `kStreetBrickChance` (0.72) to mix brick buildings and towers.
+`kStreetNearSidewalkChance` (0.45) places some at the regular `kBrickBuildingSetback` (0.3); others sit farther back by
+`kStreetExtraSetbackMin`–`kStreetExtraSetbackMax` (1.4–3.4). The whole lot, including its background columns, shares that
+extra setback to prevent intersections. Brick dimensions and floor/window alignment stay regular.
+Longitudinal spacing is at least 12 units to clear the tower lots, increasing with building depth and
+`kBrickBuildingGap` (1.2). Outer columns keep mixed brick/tower scenery, with tower variation within separate lots.
+Buildings retain their identity, floor count and spacing as the world scrolls, including when indices pass zero.
+Only the innermost building column receives doors: one tile at the bottom center of its street-facing side.
+Facade patches partition the surface without overlapping quads.
+`Quad::facadeVerticalRange` gives each patch its normalized bottom/top within the whole building, so foundation occlusion
+does not restart above an entrance or at a roof band.
+
+All three brick sources load matching surface and normal maps; their height maps expose the generated relief for
+inspection. `brick_building_window_glass.png` marks only the blue panes and enables the same live planar and sky reflections
+as skyscrapers. Green door panels have a restrained metallic finish and raised frame/panel detail; surrounding brick
+has zero metallic response. Pale mortar and dark pits are recessed and occluded, with high roughness and low reflectivity.
+Repeating wall/window normals wrap their texture borders; single door normals clamp them. These maps share the albedo's
+UVs and filtering, including PSX affine coordinates.
+
 Regenerate the game catalog with `python3 scripts/generate_material_maps.py`, or choose one texture using
-`--texture assets/skyscraper.png --profile skyscraper`. The facade profile emits surface, normal and glass-mask PNGs
+`--texture assets/textures/skyscraper/skyscraper.png --profile skyscraper`. The facade profile emits surface, normal and glass-mask PNGs
 at the original image size, with clamped border normals for a complete, untiled facade. `--seed` chooses repeatable
 pane/wear variation; `--output-dir` redirects generated maps for inspection. Recipes live in the script and the resulting
 PNGs can also be edited directly; reloading the game's assets picks up those edits without a shader rebuild.
+The `brick_window`, `brick_wall` and `brick_door` profiles regenerate each new brick texture independently, e.g.
+`--texture assets/textures/brick_building/brick_building_door.png --profile brick_door`. Brick relief defaults to normal strength 3.0, adjustable
+with `--normal-strength` or the runtime `MaterialTextures::normalScale`.
 
 Normal mode filters both material albedo and data maps with trilinear mipmaps, using each pixel's UV derivatives
 rather than one rounded mip level per road segment or facade. PSX keeps nearest texels and continuously blends adjacent mip
@@ -145,8 +192,9 @@ share a capture; the renderer selects the most visible nearby planes and updates
 Rendering and sampling use the same mirrored, cropped projection; captures are never stretched across the facade UVs
 or rendered from a different street camera. The glass mask is applied once after selecting the reflection, so filtered
 pane edges cannot show a displaced cubemap image underneath the planar one.
-With `Sky::panorama`, distant panes sample that bitmap directly, and no six-face world/sky cubemap is generated.
-Nearby planar views still capture moving world geometry. Without a panorama, distant panes fall back to a live cubemap
+With `Sky::texturedClouds` or `Sky::panorama`, distant panes sample the same authored sky directly, and no six-face
+world/sky cubemap is generated. Nearby planar views still capture moving world geometry. Without either authored sky,
+distant panes fall back to a live cubemap
 captured from six 90-degree views. `Scene::reflectionProbePosition` optionally places that shared distant probe;
 by default it follows the main camera. It does not affect local planar captures or the supplied sky panorama.
 All captures reuse the current sun shadow and disable world-reflection sampling to prevent feedback. They omit UI and
@@ -155,8 +203,8 @@ Reflection textures store display colors in sRGB, so mip filtering and sampling 
 Perceptual roughness squared selects continuously filtered mip levels, preserving detail in smooth panes. The glass mask
 restricts captured specular to panes; masonry and other materials retain the analytic environment. Fresnel, reflectivity,
 occlusion and final PSX RGB555 conversion still apply. Shadowed glass retains indirect reflections.
-`RenderSettings::worldReflectionMapSize` sets the cubemap face resolution without a panorama (default 128);
-zero disables world reflections, including local captures and the bitmap reflection fallback, while retaining the sky background.
+`RenderSettings::worldReflectionMapSize` sets the cubemap face resolution for procedural skies (default 128);
+zero disables world reflections, including local captures and authored sky reflections, while retaining the sky background.
 `planarReflectionSize` sets the full-view longest-side resolution (default 512), cropped to each plane's visible area;
 zero disables planar captures while retaining the distant environment fallback.
 `maxPlanarReflections` limits the number of local captures (default 6), and `planarReflectionDistance` limits the camera's
@@ -174,14 +222,35 @@ Foundation occlusion uses whole-face height and affects only indirect light, ind
 `Quad::haze` blends a surface into the sky haze while retaining opacity and depth occlusion.
 Game skyscrapers map the complete, clamped texture once onto each of their four sides. Brick walls use a fixed world size
 for each texture tile. Buildings remain opaque as they fade into the distance.
-The game loads `assets/skybox.png` once and uses it through `Sky::panorama` in the main view, local reflection backgrounds
-and distant glass reflections. The supplied cloud artwork maps onto the upper dome, with elevation compressed toward
-the horizon for the downward-facing game camera. Mirrored horizontal wrapping joins its nonmatching image edges.
-Sky and glass shaders share the same mapping and sample source texels with nearest-neighbor sampling at mip level zero,
-without image smoothing or pole blending.
-This path performs texture lookups rather than cloud ray marches or offscreen sky generation. It stays fixed when the
-camera translates and follows world directions when the camera rotates. Night blend darkens the supplied artwork.
-Set `Sky::panorama = nullptr` to select the procedural sky described below.
+The game uses a blue sky gradient with `cloud1.png`, `cloud2.png` and `cloud3.png` from `assets/textures/sky/` in
+`Sky::texturedClouds`.
+Their alpha channels reveal the gradient around and through the authored silhouettes. Three groups of sky slots retain
+the source proportions, with seeded random horizontal offsets, elevations and sizes for each cloud. Whole slots close
+the dome at its longitude seam; neighboring slots are sampled together so wind never changes a cloud's identity at a
+slot boundary. The wind offset wraps over a full turn. Clouds use a tangent-plane projection on the sky dome, a slight
+concave bow and slow sinusoidal UV billowing. Each group scrolls at its own speed using `Scene::time`; positions follow
+world directions, independent of camera translation.
+`SkyCloudLayer` exposes scatter, size variation, curvature, warp strength and speed; the corresponding `kCloud*` settings
+in `GameConfig.h` configure the game. `Sky::layoutSeed`/`kSkyLayoutSeed` changes the stable random arrangement.
+Sky and glass shaders share `sky_clouds.glsl` and use nearest sampling at mip level zero; this path performs no cloud ray
+marches or offscreen sky generation.
+
+`Sky::stars` controls sparse random star positions on directional cube-face cells, avoiding a singularity at the zenith.
+Stars fade in as `nightBlend` passes 0.6–0.95, stay fixed in world directions, and twinkle independently using the same game
+clock. A few brighter stars have small sparkle rays. Clouds composite over the stars so their alpha masks occlude them.
+`kNightStarDensity`, `kNightStarSizeDegrees`, `kNightStarBrightness`, `kNightStarTwinkleSpeed` and
+`kNightStarTwinkleStrength` tune the game defaults. Stars and cloud animation freeze with game time and are shared with
+planar captures and distant window reflections. The procedural fallback keeps its own existing star style.
+`Sky::nightBlend` continuously interpolates `top`/`bottom` daylight through `dusk` at 0.5 to `night` at 1.
+`Sky::palette()` supplies the same sky, horizon and cloud tint to backgrounds, material lighting and fog. The game also
+changes directional light color and ambient fill, with blue moonlight keeping nighttime streets readable. Local reflections
+render this same sky; distant panes sample it directly. Cloud sizes, elevations, offsets, speeds, opacity and all three
+palettes are configured in `GameConfig.h`.
+For reusable scenes, `Sky::panorama` still supports an optional upper-hemisphere bitmap. Its elevation is compressed
+toward the horizon and mirrored horizontal wrapping joins nonmatching edges. Sky and glass sample source texels without
+filtering or pole blending. `Sky::panoramaScrollSpeed` sets drift in texture widths per second, defaulting to zero; its
+offset wraps over the full two-width mirrored period. Assigned cloud layers take precedence over the panorama.
+Clear both the cloud textures and panorama to select the procedural sky described below.
 The procedural sky reconstructs world-space view rays from the camera basis, vertical FOV and render-target aspect. Its continuous
 dome follows yaw, pitch and roll, blending continuously into horizon haze. The dome and directionally placed stars, sun
 and moon stay fixed when the camera translates. Sun size and distance set its angular diameter, so the disc stays round
@@ -246,6 +315,18 @@ field and ripple shader, with no particle mesh generation or per-frame asset upl
 `updateCollectEffects()` advances existing feedback before collisions, so a newly collected item starts at age zero,
 including pickups that end the game. The optional `effectRemainder` argument to `Renderer::render()` and
 `WorldScene::build()` supplies seconds since the latest simulation tick for smooth rendering between updates.
+
+`Scene::particles` holds alpha-blended quads drawn after opaque objects, sorted back to front for each camera. They
+depth-test against the scene without writing depth or casting shadows, and participate in local window captures.
+Texture cutouts use `Quad::alphaCutoff`; whole-particle fading uses `Quad::opacity`. The PSX pass removes their coverage
+from the color-dither mask, preserving transparent holes and avoiding dithering on the leaf sprites.
+`WorldScene` gives each tree a stable emitter identity. Falling leaves use seeded flutter and game time; curbside litter
+uses a swept player path in scrolling track coordinates. Lifted leaves tumble and fade once, retain their spent identity
+while their lot remains visible, and reset when time or scroll restarts. The visible leaf budget keeps the nearest leaves.
+`SceneryLayout.h` shares building lot geometry with parks: two frontage columns are reserved for larger lawns, and
+brick forecourt gardens are split around a clear entrance corridor. Gardens anchor to the straight facade, with partial
+grass tiles filling their exact width and no fence against the building wall. Texture repeats follow the trimmed width.
+Model scale is limited by neighboring facade clearance.
 
 The directional light's `ShadowVolume` is a stable world-space orthographic region. Size it to cover the scene's casters
 and receivers. `RenderSettings` chooses shadow-map resolution, retro resolution, vertex snapping, and model texture distortion.
@@ -424,13 +505,18 @@ factors, and external metallic/roughness, normal and occlusion textures using `T
 Both material factors default to 1; metallic/roughness maps use linear G/B channels, tangent-space normal maps use RGB,
 and occlusion uses linear R, as specified by [glTF 2.0](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#materials).
 Normal scale and occlusion strength are retained, with shared metallic/roughness and occlusion images uploaded once.
+Authored `MASK` alpha cutoffs and `doubleSided` lighting are retained, including cutout model shadows using UV0.
+Base-color samplers that request nearest minification and magnification retain that sampling; repeating S/T wrap is
+also retained. Textured `Quad` commands
+can set `alphaCutoff` and `doubleSided` for thin fences: the cutout follows UV tiling/offset in color and shadows, and
+is excluded from the opaque reflection depth prepass so transparent gaps reveal the captured world.
 Non-numeric or out-of-range factors/occlusion strength, nonfinite normal scale, invalid image references and unsupported
 UV sets are rejected. It centers X/Z, grounds Y,
 and normalizes to the requested height. Missing normals are generated from triangle geometry. Accessor sizes, byte ranges, layouts, indices, and node cycles are checked before use.
 Errors are reported as exceptions rather than dereferencing missing or out-of-range data.
 
 GLB containers, embedded/data-URI buffers/images, multiple buffers, sparse accessors, compressed meshes, animations,
-skinning, extra UV sets, emissive maps, and full PBR extensions/alpha materials are not implemented.
+skinning, extra UV sets, emissive maps, and full PBR extensions/blended alpha materials are not implemented.
 Add a format adapter producing `assets::ModelData` to extend import without changing GPU ownership or scene submission.
 The bundled model licenses remain with their original files.
 

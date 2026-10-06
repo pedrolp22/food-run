@@ -3,6 +3,7 @@
 #include "engine/graphics/Material.h"
 #include "engine/graphics/Texture.h"
 #include "engine/math/Math.h"
+#include <array>
 #include <optional>
 #include <variant>
 #include <vector>
@@ -37,6 +38,33 @@ struct DirectionalLight {
     float lightForNormal(math::Vec3 normal) const;
     math::Mat4 viewProjection() const;
 };
+struct SkyPalette {
+    Color top;
+    Color horizon;
+    Color cloudTint;
+};
+struct SkyCloudLayer {
+    const Texture* texture = nullptr;
+    float widthDegrees = 26;
+    float elevationDegrees = 7;
+    float repeatDegrees = 90; // Use a divisor of 360 for a seamless full dome.
+    float scrollSpeed = 0.0006f; // World turns per second.
+    float offset = 0; // World turns.
+    float opacity = 1;
+    float horizontalScatter = 0; // Fraction of slot spacing, [0, .45].
+    float elevationScatterDegrees = 0;
+    float sizeVariation = 0; // Fractional scale variation, [0, .5].
+    float curvature = 0; // Concave texture bow; 0 retains an undeformed cloud.
+    float warpStrength = 0;
+    float warpSpeed = .14f; // Radians per second.
+};
+struct SkyStars {
+    float density = 0; // Authored cloud skies only; zero disables stars.
+    float sizeDegrees = .11f;
+    float brightness = .9f;
+    float twinkleSpeed = 1.4f;
+    float twinkleStrength = .6f;
+};
 struct Sky {
     // Sky/cloud shading is continuous; retro modes apply their native color precision.
     Color top = {0.30f, 0.60f, 0.93f};
@@ -47,8 +75,16 @@ struct Sky {
     float sunCore = 6.5f;
     float sunHaze = 2.2f;
     float nightBlend = 0;
-    float cloudCoverage = 0.40f; // 0: clear sky, 1: overcast; sparse noise-based cloud volumes.
+    float cloudCoverage = 0.40f; // Procedural cloud volumes only, from clear (0) to overcast (1).
     const Texture* panorama = nullptr; // Borrowed upper-hemisphere panorama; bypasses procedural clouds when present.
+    float panoramaScrollSpeed = 0; // Horizontal texture widths per second; zero keeps the panorama stationary.
+    std::array<SkyCloudLayer, 3> texturedClouds{}; // Borrowed alpha sprites over a gradient; bypasses sky generation.
+    SkyPalette dusk = {{.54f, .28f, .51f}, {.98f, .62f, .67f}, {1, .67f, .73f}};
+    SkyPalette night = {{.025f, .035f, .10f}, {.12f, .16f, .29f}, {.24f, .28f, .44f}};
+    unsigned int layoutSeed = 0; // Stable cloud scatter and star positions in world directions.
+    SkyStars stars{};
+    bool hasTexturedClouds() const;
+    SkyPalette palette() const; // Continuous day (0), rose dusk (.5), night (1).
 };
 struct MenuOverlay {
     bool visible = false;
@@ -77,6 +113,9 @@ struct Quad {
     bool pbrSurface = false; // Enable the shared material on textured or colored quads.
     std::optional<float> psxMinificationLodBias{}; // Opt in to nearest mip texels; empty preserves base-level sampling.
     MaterialTextures materialTextures{}; // PBR surface data; maps follow the same tiling/affine UVs as the color texture.
+    math::Vec2 facadeVerticalRange = {0, 1}; // Normalized bottom/top in the whole facade, for foundation occlusion.
+    float alphaCutoff = 0; // Cutout coverage, shared by color, shadow and reflection passes.
+    bool doubleSided = false; // Flip lighting normals on the back of thin surfaces.
 };
 struct Cube {
     math::Mat4 model = math::identity();
@@ -127,5 +166,6 @@ struct Scene {
     std::vector<DrawCommand> objects;
     std::vector<EffectCommand> effects; // Additive, depth-tested, no depth writes or shadow casting.
     std::optional<math::Vec3> reflectionProbePosition{}; // Empty captures the world at the camera position.
+    std::vector<Quad> particles; // Alpha-blended surfaces, sorted per camera; no depth writes or shadow casting.
 };
 } // namespace engine::graphics

@@ -38,6 +38,7 @@ void Simulation::update(float deltaTime) {
         state_.score += distancePoints;
         scoreAccumulator_ -= static_cast<float>(distancePoints);
     }
+    state_.dayNight.update(state_.score, deltaTime);
 }
 
 void updateCollectEffects(GameState& state, float deltaTime) {

@@ -9,6 +9,7 @@ out vec4 vShadowPosition;
 out vec3 vDitherPosition;
 uniform vec2 uTexScale;
 uniform vec2 uTexOffset;
+uniform vec2 uFacadeVerticalRange;
 
 out vec2 vTexCoord;
 noperspective out vec2 vAffineTexCoord;
@@ -20,7 +21,7 @@ void main() {
     vec4 worldPosition = uModel * vec4(aPosition, 1.0);
     clipReflection(worldPosition);
     vWorldPosition = worldPosition.xyz;
-    vFacadeUv = aTexCoord;
+    vFacadeUv = vec2(aTexCoord.x, mix(uFacadeVerticalRange.x, uFacadeVerticalRange.y, aTexCoord.y));
     vShadowPosition = uLightViewProj * worldPosition;
     gl_Position = snapVertex(uMvp * vec4(aPosition, 1.0));
     vTexCoord = aTexCoord * uTexScale + uTexOffset;

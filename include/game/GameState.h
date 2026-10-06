@@ -1,6 +1,7 @@
 #pragma once
 
 #include "GameConfig.h"
+#include "game/DayNightCycle.h"
 #include "game/Entities.h"
 #include <vector>
 
@@ -15,6 +16,7 @@ struct GameState {
     int score = 0;
     int health = GameConfig::kMaxHealth;
     int purpleStreak = 0;
+    DayNightCycle dayNight;
     std::vector<Entity> entities;
     std::vector<CollectEffect> collectEffects;
 };

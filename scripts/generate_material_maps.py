@@ -3,8 +3,11 @@
 Run with Python 3 and Pillow. The checked-in PNGs are runtime assets; Python is
 not a build dependency. R=occlusion, G=roughness multiplier, B=metallic multiplier,
 A=reflectivity multiplier. Streets use roughness/reflectivity factors of one and
-zero metallic. Road and sidewalk relief also emits inspectable height maps. Facades
-emit an R-channel glass mask and use factors of one for all mapped properties.
+zero metallic. Street and brick relief also emits inspectable height maps. Window
+facades emit an R-channel glass mask. Brick doors have metallic green panels;
+surrounding masonry stays dielectric. Mapped windows and doors use factors of one.
+Grass, foliage, bark and painted fence profiles retain alpha cutouts while adding
+source-aligned relief and local finishes. Transparent pixels contain neutral data.
 """
 
 import argparse
@@ -133,13 +136,101 @@ def surface_pixel(rgb, profile):
     return (0.94 + 0.06 * light, 1 - strength * light, 1, 0.60 + 0.40 * light), 0
 
 
+def brick_data(image, profile, seed):
+    """Keep source-aligned panes smooth, door panels metallic and mortar recessed."""
+    width, _ = image.size
+    pixels = list(image.get_flattened_data() if hasattr(image, "get_flattened_data") else image.getdata())
+    if profile == "brick_window":
+        surface, heights, glass = facade_data(image, seed)
+    else:
+        surface, heights, glass = [None] * len(pixels), [0] * len(pixels), None
+    for index, rgb in enumerate(pixels):
+        if glass and glass[index] >= 128:
+            continue
+        r, g, b = rgb
+        grain = noise(index % width, index // width, seed)
+        light = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255
+        if profile == "brick_door" and g > max(r, b) * 1.3 and g - r > 6:
+            # Three green shades encode raised frame, panels and inset grooves.
+            tone = max(0, min(1, (g - 20) / 16))
+            properties = (0.92 + 0.06 * tone, 0.52 - 0.12 * tone,
+                          0.82 + 0.08 * tone, 0.42 + 0.14 * tone)
+            relief = 0.13 + 0.075 * tone
+        elif profile == "brick_window" and rgb in ((115, 36, 24), (156, 141, 123), (139, 125, 106)):
+            # Raised brown dividers and the stone sill are not mortar cavities.
+            divider = rgb == (115, 36, 24)
+            properties = (0.94, 0.76 if divider else 0.93, 0, 0.52 if divider else 0.36)
+            relief = 0.145 if divider else 0.16
+        else:
+            # Pale warm mortar has much less red/green contrast than fired brick.
+            mortar = smoothstep(0.47, 0.70, g / max(r, 1)) * smoothstep(0.28, 0.48, light)
+            pit = 1 - smoothstep(0.065, 0.16, light)
+            properties = (0.97 - 0.17 * mortar - 0.12 * pit,
+                          0.88 + 0.065 * grain + 0.035 * mortar, 0,
+                          0.50 - 0.18 * mortar - 0.12 * pit)
+            relief = (0.105 + 0.020 * (grain - 0.5) + 0.035 * (light - 0.25)
+                      - 0.09 * mortar - 0.040 * pit)
+        surface[index] = tuple(encode(value) for value in properties)
+        heights[index] = relief
+    return surface, heights, glass
+
+
+def scenery_data(image, profile, seed):
+    """Generate greenery and fence finishes without embossing their transparent silhouettes."""
+    width, _ = image.size
+    pixels = list(image.get_flattened_data() if hasattr(image, "get_flattened_data") else image.getdata())
+    surface, heights = [], []
+    for index, (red, green, blue, alpha) in enumerate(pixels):
+        if not alpha:
+            surface.append((255, 255, 0, 0))
+            heights.append(0)
+            continue
+        r, g, b = (value / 255 for value in (red, green, blue))
+        light = 0.2126 * r + 0.7152 * g + 0.0722 * b
+        grain = noise(index % width, index // width, seed)
+        if profile == "grass":
+            tuft = smoothstep(0.18, 0.44, light)
+            cavity = 1 - smoothstep(0.17, 0.31, light)
+            properties = (0.95 - 0.16 * cavity, 0.98 - 0.09 * tuft, 0, 0.28 + 0.16 * tuft)
+            relief = 0.025 + 0.080 * tuft - 0.015 * cavity
+        elif profile == "fence":
+            # The dark pickets are paint; gray/silver highlights reveal smoother iron beneath it.
+            metal = smoothstep(0.16, 0.50, light)
+            properties = (0.95 + 0.05 * metal, 0.78 - 0.37 * metal, 0.95 * metal, 0.36 + 0.45 * metal)
+            relief = 0.018 + 0.040 * metal
+        else:
+            # Bright source veins have shallow relief and a restrained waxy dielectric sheen.
+            vein = smoothstep(0.60, 0.77, light)
+            leaf = (0.95 + 0.04 * light, 0.68 - 0.13 * light - 0.025 * vein, 0, 0.30 + 0.20 * light)
+            leaf_height = 0.018 + 0.030 * light + 0.012 * vein
+            if profile == "tree":
+                foliage = smoothstep(-0.03, 0.045, g - r) * smoothstep(0.025, 0.10, g - b)
+                groove = 1 - smoothstep(0.10, 0.31, light)
+                bark = (0.93 - 0.15 * groove, 0.94 + 0.05 * groove, 0, 0.20 + 0.07 * (1 - groove))
+                bark_height = 0.025 + 0.065 * (1 - groove) + 0.003 * (grain - 0.5)
+                properties = tuple(a * (1 - foliage) + b * foliage for a, b in zip(bark, leaf))
+                relief = bark_height * (1 - foliage) + leaf_height * foliage
+            else:
+                properties, relief = leaf, leaf_height
+        surface.append(tuple(encode(value) for value in properties))
+        heights.append(relief)
+    return surface, heights
+
+
 def build(source, destination, profile, normal=False, max_dimension=None, repeat=True, seed=0, normal_strength=None):
-    image = Image.open(source).convert("RGBA").convert("RGB")
+    rgba = Image.open(source).convert("RGBA")
+    image = rgba.convert("RGB")
     if max_dimension:
+        rgba.thumbnail((max_dimension, max_dimension), Image.Resampling.BOX)
         image.thumbnail((max_dimension, max_dimension), Image.Resampling.BOX)
     width, height = image.size
+    scenery = profile in ("grass", "fence", "leaf", "tree")
     if profile == "skyscraper":
         surface, heights, glass = facade_data(image, seed)
+    elif profile.startswith("brick_"):
+        surface, heights, glass = brick_data(image, profile, seed)
+    elif scenery:
+        surface, heights = scenery_data(rgba, profile, seed)
     else:
         surface, heights = [], []
         pixels = image.get_flattened_data() if hasattr(image, "get_flattened_data") else image.getdata()
@@ -152,31 +243,41 @@ def build(source, destination, profile, normal=False, max_dimension=None, repeat
     output.putdata(surface)
     output.save(destination, compress_level=9)
     if normal:
-        strength = normal_strength if normal_strength is not None else (3.0 if profile in ("road", "concrete") else 1.5)
+        strength = normal_strength if normal_strength is not None else (
+            3.0 if profile in ("road", "concrete", "grass") or profile.startswith("brick_") else 1.5)
         normals = []
-        def height_at(x, y):
+        alpha = list(rgba.getchannel("A").get_flattened_data() if hasattr(rgba, "get_flattened_data")
+                     else rgba.getchannel("A").getdata())
+        def height_at(x, y, center):
             if repeat:
-                return heights[(y % height) * width + x % width]
-            return heights[max(0, min(height - 1, y)) * width + max(0, min(width - 1, x))]
+                index = (y % height) * width + x % width
+            else:
+                index = max(0, min(height - 1, y)) * width + max(0, min(width - 1, x))
+            return center if scenery and not alpha[index] else heights[index]
         for y in range(height):
             for x in range(width):
-                left = height_at(x - 1, y)
-                right = height_at(x + 1, y)
-                top = height_at(x, y - 1)
-                bottom = height_at(x, y + 1)
-                # Source images are flipped vertically by the game loader;
-                # tangent +Y must therefore oppose image-down, as on the color map.
-                nx, ny, nz = (left - right) * strength, (bottom - top) * strength, 1.0
+                index = y * width + x
+                if scenery and not alpha[index]:
+                    normals.append((128, 128, 255))
+                    continue
+                center = heights[index]
+                left = height_at(x - 1, y, center)
+                right = height_at(x + 1, y, center)
+                top = height_at(x, y - 1, center)
+                bottom = height_at(x, y + 1, center)
+                # Game quads flip the image; glTF tree textures retain image-down UVs.
+                vertical = top - bottom if profile == "tree" else bottom - top
+                nx, ny, nz = (left - right) * strength, vertical * strength, 1.0
                 magnitude = sqrt(nx * nx + ny * ny + nz * nz)
                 normals.append(tuple(encode(component / magnitude * 0.5 + 0.5) for component in (nx, ny, nz)))
         output = Image.new("RGB", image.size)
         output.putdata(normals)
         output.save(destination.with_name(destination.name.replace("_surface", "_normal")), compress_level=9)
-        if profile in ("road", "concrete"):
+        if profile in ("road", "concrete") or profile.startswith("brick_") or scenery:
             output = Image.new("L", image.size)
             output.putdata([encode(value / 0.32) for value in heights])
             output.save(destination.with_name(destination.name.replace("_surface", "_height")), compress_level=9)
-    if profile == "skyscraper":
+    if profile in ("skyscraper", "brick_window"):
         output = Image.new("L", image.size)
         output.putdata(glass)
         output.save(destination.with_name(destination.name.replace("_surface", "_glass")), compress_level=9)
@@ -186,10 +287,12 @@ def build(source, destination, profile, normal=False, max_dimension=None, repeat
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--texture", type=Path, help="Generate maps for one source texture instead of the game catalog.")
-    parser.add_argument("--profile", choices=["road", "concrete", "masonry", "roof", "skyscraper", "wood", "metal", "coated"])
+    parser.add_argument("--profile", choices=["road", "concrete", "masonry", "roof", "skyscraper",
+                                             "brick_window", "brick_wall", "brick_door", "wood", "metal", "coated",
+                                             "grass", "fence", "leaf", "tree"])
     parser.add_argument("--output-dir", type=Path, help="Override the catalog's map destinations.")
     parser.add_argument("--seed", type=int, default=0, help="Deterministic facade wear/pane variation (default: 0).")
-    parser.add_argument("--normal-strength", type=float, help="Override relief strength (streets: 3.0, other surfaces: 1.5).")
+    parser.add_argument("--normal-strength", type=float, help="Override relief strength (streets/grass/brick: 3.0, other surfaces: 1.5).")
     args = parser.parse_args()
     if args.normal_strength is not None and (not isfinite(args.normal_strength) or args.normal_strength < 0):
         parser.error("--normal-strength must be finite and nonnegative")
@@ -197,18 +300,33 @@ def main():
         if not args.profile:
             parser.error("--texture requires --profile")
         prop = args.profile in ("wood", "metal", "coated")
-        build(args.texture, (args.output_dir or ROOT / "materials") / (args.texture.stem + "_surface.png"), args.profile,
+        folder = args.output_dir or (args.texture.parent if args.profile == "tree" else ROOT / "materials")
+        build(args.texture, folder / (args.texture.stem + "_surface.png"), args.profile,
               normal=not prop, max_dimension=256 if prop else None,
-              repeat=args.profile != "skyscraper", seed=args.seed, normal_strength=args.normal_strength)
+              repeat=args.profile not in ("skyscraper", "brick_door", "leaf"), seed=args.seed,
+              normal_strength=args.normal_strength)
         return
     if args.profile:
         parser.error("--profile requires --texture")
-    for filename, profile in [("road", "road"), ("sidewalk", "concrete"),
-                              ("wall_brick", "masonry"), ("building_top", "roof")]:
-        build(ROOT / (filename + ".png"), (args.output_dir or ROOT / "materials") / (filename + "_surface.png"), profile,
+    for source, profile in [("textures/road.png", "road"), ("textures/sidewalk.png", "concrete"),
+                            ("wall_brick.png", "masonry"), ("textures/skyscraper/building_top.png", "roof")]:
+        filename = Path(source).stem
+        build(ROOT / source, (args.output_dir or ROOT / "materials") / (filename + "_surface.png"), profile,
               normal=True, normal_strength=args.normal_strength)
-    build(ROOT / "skyscraper.png", (args.output_dir or ROOT / "materials") / "skyscraper_surface.png", "skyscraper",
+    build(ROOT / "textures/skyscraper/skyscraper.png", (args.output_dir or ROOT / "materials") / "skyscraper_surface.png", "skyscraper",
           normal=True, repeat=False, seed=args.seed, normal_strength=args.normal_strength)
+    for part in ("window", "wall", "door"):
+        filename = "brick_building_" + part
+        build(ROOT / "textures/brick_building" / (filename + ".png"), (args.output_dir or ROOT / "materials") / (filename + "_surface.png"),
+              "brick_" + part, normal=True, repeat=part != "door", seed=args.seed,
+              normal_strength=args.normal_strength)
+    for filename, profile in [("grass", "grass"), ("spikedfence_decor", "fence"), ("leaf", "leaf")]:
+        build(ROOT / "textures/grassy" / (filename + ".png"),
+              (args.output_dir or ROOT / "materials") / (filename + "_surface.png"), profile,
+              normal=True, repeat=profile != "leaf", seed=args.seed, normal_strength=args.normal_strength)
+    folder = ROOT / "models/tree/textures"
+    build(folder / "Tree_baseColor.png", (args.output_dir or folder) / "Tree_baseColor_surface.png", "tree",
+          normal=True, seed=args.seed, normal_strength=args.normal_strength)
     for model, filename, profile in [
         ("bench", "Material.001_baseColor", "wood"),
         ("bench", "Material.002_baseColor", "metal"),

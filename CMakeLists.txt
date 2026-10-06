@@ -29,7 +29,7 @@ subway_library(subway_math math src/engine/math/Math.cpp src/engine/math/TrackCu
 subway_library(subway_assets assets src/engine/assets/Json.cpp src/engine/assets/GltfLoader.cpp
     src/engine/assets/SpriteGeometry.cpp src/engine/assets/AlphaDistanceField.cpp)
 target_link_libraries(subway_assets PUBLIC subway::math)
-subway_library(subway_gameplay gameplay src/game/Simulation.cpp src/game/Collision.cpp)
+subway_library(subway_gameplay gameplay src/game/Simulation.cpp src/game/Collision.cpp src/game/DayNightCycle.cpp)
 set_target_properties(subway_gameplay PROPERTIES EXCLUDE_FROM_ALL TRUE)
 
 if(SUBWAY_BUILD_GRAPHICS OR SUBWAY_BUILD_PLATFORM)
@@ -84,7 +84,8 @@ if(SUBWAY_BUILD_GAME OR SUBWAY_ENABLE_GRAPHICS_TESTS)
     if(NOT SUBWAY_BUILD_GRAPHICS OR NOT SUBWAY_BUILD_PLATFORM)
         message(FATAL_ERROR "Game/graphics tests require graphics and platform libraries")
     endif()
-    subway_library(subway_world world src/game/GameAssets.cpp src/game/WorldScene.cpp src/game/SceneCommands.cpp)
+    subway_library(subway_world world src/game/GameAssets.cpp src/game/WorldScene.cpp src/game/SceneCommands.cpp
+        src/game/Scenery.cpp src/game/Leaves.cpp)
     target_link_libraries(subway_world PUBLIC subway::graphics subway::gameplay)
 endif()
 if(SUBWAY_BUILD_GAME)

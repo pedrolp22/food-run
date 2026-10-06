@@ -124,7 +124,8 @@ void assetTests() {
     distanceFieldChecks();
     spriteGeometryChecks();
     using namespace engine::assets;
-    for (const auto& [name, count] : {std::pair{"traffic_cone", 3}, {"barrier", 4}, {"trash_can", 1}, {"bench", 2}}) {
+    for (const auto& [name, count] : {std::pair{"traffic_cone", 3}, {"barrier", 4}, {"trash_can", 1}, {"bench", 2},
+                                    {"tree", 1}}) {
         const auto model = loadGltf(std::filesystem::path(TEST_ASSET_DIR) / "models" / name / "scene.gltf", 2);
         CHECK(model.primitives.size() == static_cast<std::size_t>(count));
         float low = 1e9f, high = -1e9f;
@@ -164,6 +165,27 @@ void assetTests() {
     fixture.json(materialJson);
     const auto material = loadGltf(path).primitives[0].material;
     CHECK(near(material.roughness, .28f) && near(material.metallic, .6f));
+    CHECK(material.alphaCutoff == 0 && !material.doubleSided && !material.baseTextureNearest);
+    auto maskedJson = materialJson;
+    replace(maskedJson,
+            "\"pbrMetallicRoughness\":", "\"alphaMode\":\"MASK\",\"doubleSided\":true,\"pbrMetallicRoughness\":");
+    fixture.json(maskedJson);
+    CHECK(near(loadGltf(path).primitives[0].material.alphaCutoff, .5f));
+    CHECK(loadGltf(path).primitives[0].material.doubleSided);
+    replace(maskedJson, "\"alphaMode\":\"MASK\"", "\"alphaMode\":\"MASK\",\"alphaCutoff\":0.3");
+    fixture.json(maskedJson);
+    CHECK(near(loadGltf(path).primitives[0].material.alphaCutoff, .3f));
+    for (const char* invalid : {"-0.1", "1.1", "false", "\"cutout\""}) {
+        auto invalidMask = maskedJson;
+        replace(invalidMask, "\"alphaCutoff\":0.3", std::string("\"alphaCutoff\":") + invalid);
+        fixture.json(invalidMask);
+        checkThrows([&] { loadGltf(path); });
+    }
+    const auto tree = loadGltf(std::filesystem::path(TEST_ASSET_DIR) / "models/tree/scene.gltf");
+    CHECK(tree.primitives[0].material.doubleSided && tree.primitives[0].material.baseTextureNearest);
+    CHECK(tree.primitives[0].material.baseTextureRepeat);
+    CHECK(near(tree.primitives[0].material.alphaCutoff, .0045714425f));
+    CHECK(tree.primitives[0].material.metallic == 0 && tree.primitives[0].material.roughness > .8f);
     for (const char* invalidFactor : {"-0.1", "1.1", "true", "\"smooth\""}) {
         auto invalidMaterial = materialJson;
         replace(invalidMaterial, "0.28", invalidFactor);

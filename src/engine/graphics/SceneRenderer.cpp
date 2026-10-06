@@ -191,6 +191,7 @@ struct SceneRenderer::Impl {
     TextureSampler materialClamp{false, true};
     TextureSampler materialRepeat{true, true};
     TextureSampler panoramaSampler;
+    TextureSampler cloudSampler;
     RenderMode mode = RenderMode::Normal;
     Mat4 viewProjection;
     Mat4 lightProjection;
@@ -208,6 +209,59 @@ struct SceneRenderer::Impl {
     }
 
     bool psx() const { return mode == RenderMode::Psx; }
+    float panoramaOffset(const Scene& scene) const {
+        const double offset = static_cast<double>(scene.time) * scene.sky.panoramaScrollSpeed;
+        // Mirrored wrapping repeats every two texture widths. Keep the shared
+        // offset small without introducing a seam or tying motion to frame rate.
+        return std::isfinite(offset) ? static_cast<float>(std::fmod(offset, 2.0)) : 0;
+    }
+    void cloudSky(const detail::CloudSkyUniforms& p, const Scene& scene, bool allow = true) const {
+        const bool enabled = allow && scene.sky.hasTexturedClouds();
+        glUniform1i(p.enabled, enabled);
+        const auto palette = scene.sky.palette();
+        color(p.topColor, palette.top);
+        color(p.horizonColor, palette.horizon);
+        color(p.cloudTint, palette.cloudTint);
+        const auto finiteRange = [](float value, float low, float high, float fallback = 0) {
+            return std::isfinite(value) ? std::clamp(value, low, high) : fallback;
+        };
+        glUniform1ui(p.seed, scene.sky.layoutSeed);
+        glUniform1f(p.time, std::isfinite(scene.time) ? scene.time : 0);
+        const auto& stars = scene.sky.stars;
+        const float starFade = smoothTransition(.6f, .95f, finiteRange(scene.sky.nightBlend, 0, 1));
+        glUniform4f(p.stars, finiteRange(stars.density, 0, 1), radians(finiteRange(stars.sizeDegrees, .01f, .5f, .11f)),
+                    finiteRange(stars.brightness, 0, 1), starFade);
+        glUniform2f(p.twinkle, finiteRange(stars.twinkleSpeed, 0, 10), finiteRange(stars.twinkleStrength, 0, 1));
+        for (std::size_t index = 0; index < scene.sky.texturedClouds.size(); ++index) {
+            const auto& layer = scene.sky.texturedClouds[index];
+            const bool present = enabled && layer.texture && layer.texture->id();
+            const int unit = 9 + static_cast<int>(index);
+            texture(p.textures[index], present ? layer.texture->id() : 0, unit);
+            glBindSampler(unit, present ? cloudSampler.id() : 0);
+            const float width = std::isfinite(layer.widthDegrees) ? std::clamp(layer.widthDegrees, .1f, 180.0f) : 26;
+            const float requestedSpacing =
+                std::isfinite(layer.repeatDegrees) ? std::clamp(layer.repeatDegrees, width, 360.0f) : 90;
+            // Whole slots close the dome even when a caller supplies a non-divisor spacing.
+            const float spacing = 360 / std::max(1.0f, std::floor(360 / requestedSpacing));
+            const float elevation =
+                std::isfinite(layer.elevationDegrees) ? std::clamp(layer.elevationDegrees, 0.0f, 90.0f) : 7;
+            const float aspect = present ? layer.texture->aspect() : 1;
+            glUniform4f(p.layouts[index], width / 360, spacing / 360, radians(elevation), radians(width / aspect));
+            const double offset = static_cast<double>(scene.time) * layer.scrollSpeed + layer.offset;
+            // Each slot now has its own identity; wrap a full turn rather than repeating one slot's artwork.
+            const float phase = std::isfinite(offset) ? static_cast<float>(std::fmod(offset, 1.0)) : 0;
+            const float opacity = present && std::isfinite(layer.opacity) ? std::clamp(layer.opacity, 0.0f, 1.0f) : 0;
+            glUniform2f(p.settings[index], phase, opacity);
+            glUniform4f(p.variation[index], finiteRange(layer.horizontalScatter, 0, .45f),
+                        radians(finiteRange(layer.elevationScatterDegrees, 0, 30)),
+                        finiteRange(layer.sizeVariation, 0, .5f), finiteRange(layer.curvature, 0, .4f));
+            glUniform2f(p.warp[index], finiteRange(layer.warpStrength, 0, .12f), finiteRange(layer.warpSpeed, 0, 5));
+        }
+    }
+    void clearSkyColor(const Scene& scene) const {
+        const Color horizon = scene.sky.hasTexturedClouds() ? scene.sky.palette().horizon : scene.sky.bottom;
+        glClearColor(horizon.r, horizon.g, horizon.b, 1);
+    }
     bool distanceFog() const { return psx() && settings.psxDistanceFog; }
     const Mesh& surfaceMesh(const Quad& command) const {
         if (!psx() || !settings.psxSubdivideQuads || settings.retroAffineStrength <= 0 || !command.texture ||
@@ -242,6 +296,9 @@ struct SceneRenderer::Impl {
         glUniform1f(program.psxLodBias, std::isfinite(bias) ? std::clamp(bias, -2.0f, 2.0f) : 0);
     }
     Color fogColor(const Scene& scene) const {
+        if (settings.psxFogFollowsSky && scene.sky.hasTexturedClouds()) {
+            return scene.sky.palette().horizon;
+        }
         const float night = std::floor(std::clamp(scene.sky.nightBlend, 0.0f, 1.0f) * 4.0f + 0.5f) / 4.0f;
         const Color day = settings.psxFogFollowsSky ? scene.sky.bottom : settings.psxFogColor;
         const Color dark = settings.psxFogFollowsSky ? Color{.38f, .31f, .40f} : settings.psxNightFogColor;
@@ -295,6 +352,13 @@ struct SceneRenderer::Impl {
         const auto sun = normalize(scene.light.direction);
         glUniform3f(p.sunDir, sun.x, sun.y, sun.z);
         glUniform3f(p.cameraPosition, scene.camera.position.x, scene.camera.position.y, scene.camera.position.z);
+        if (scene.sky.hasTexturedClouds()) {
+            const auto palette = scene.sky.palette();
+            color(p.skyColor, palette.top);
+            color(p.hazeColor, palette.horizon);
+            color(p.sunColor, scene.sky.sunColor);
+            return;
+        }
         const float night = std::floor(std::clamp(scene.sky.nightBlend, 0.0f, 1.0f) * 4.0f + 0.5f) / 4.0f;
         color(p.skyColor,
               {scene.sky.top.r * (1 - night) + 0.045f * night, scene.sky.top.g * (1 - night) + 0.055f * night,
@@ -328,23 +392,34 @@ struct SceneRenderer::Impl {
         glUniform1i(p.receivesShadow, true);
         glUniform1f(p.affine, 0);
         glUniform1f(p.alpha, 1);
+        glUniform1f(p.alphaCutoff, 0);
+        glUniform1f(p.baseAlpha, 1);
+        glUniform1i(p.doubleSided, false);
         glUniform1f(p.haze, 0);
         glUniform1f(p.time, scene.time);
         glUniform1f(p.heat, 0);
     }
-    void shadowDraw(const Mat4& model, unsigned int textureId = 0, float opacity = 1) const {
+    void shadowDraw(const Mat4& model, unsigned int textureId = 0, float opacity = 1, float alphaCutoff = .1f,
+                    bool modelMesh = false, Vec2 texScale = {1, 1}, Vec2 texOffset = {}, float baseAlpha = 1) const {
         const auto& p = programs.shadow;
         p.shader.bind();
         matrix(p.mvp, multiply(lightProjection, model));
         glUniform1i(p.textured, textureId != 0);
         glUniform1f(p.opacity, opacity);
+        glUniform1f(p.alphaCutoff, alphaCutoff);
+        glUniform1f(p.baseAlpha, baseAlpha);
+        glUniform1i(p.modelMesh, modelMesh);
+        glUniform2f(p.texScale, texScale.x, texScale.y);
+        glUniform2f(p.texOffset, texOffset.x, texOffset.y);
         texture(p.texture, textureId);
+        glBindSampler(0, 0);
     }
     void cast(const Quad& command) const {
         if (!command.castsShadow) {
             return;
         }
-        shadowDraw(command.model, 0, command.opacity);
+        shadowDraw(command.model, command.alphaCutoff > 0 && command.texture ? command.texture->id() : 0,
+                   command.opacity, command.alphaCutoff, false, command.textureScale, command.textureOffset);
         quad.draw();
     }
     void cast(const Cube& command) const {
@@ -355,8 +430,10 @@ struct SceneRenderer::Impl {
         if (!command.model) {
             return;
         }
-        shadowDraw(command.transform);
         for (const auto& primitive : command.model->primitives()) {
+            const auto& material = primitive.material;
+            shadowDraw(command.transform, material.alphaCutoff > 0 ? material.texture.id() : 0, 1, material.alphaCutoff,
+                       true, {1, 1}, {}, material.baseColor[3]);
             primitive.mesh.draw();
         }
     }
@@ -390,6 +467,8 @@ struct SceneRenderer::Impl {
             glUniform2f(p.texOffset, command.textureOffset.x, command.textureOffset.y);
             glUniform1i(p.receivesShadow, command.receivesShadow);
             glUniform1f(p.alpha, command.opacity);
+            glUniform1f(p.alphaCutoff, command.alphaCutoff);
+            glUniform1i(p.doubleSided, command.doubleSided);
             glUniform1f(p.haze, std::clamp(command.haze, 0.0f, 1.0f));
             glUniform1f(p.affine, affineStrength(command.affineStrength));
             glUniform1f(p.heat, mode == RenderMode::Normal ? command.heat : 0);
@@ -455,14 +534,20 @@ struct SceneRenderer::Impl {
                                            command.windowMaterial.worldReflections && panorama && panorama->id();
                 texture(p.panorama, skyReflection ? panorama->id() : 0, 8);
                 glBindSampler(8, skyReflection ? panoramaSampler.id() : 0);
+                glUniform1f(p.panoramaOffset, panoramaOffset(scene));
                 glUniform1i(p.hasSkyPanorama, skyReflection);
                 glUniform1f(p.skyPanoramaNight, std::floor(std::clamp(scene.sky.nightBlend, 0.0f, 1.0f) * 4 + .5f) / 4);
+                cloudSky(p.clouds, scene,
+                         !capturingReflections && settings.worldReflectionMapSize &&
+                             command.windowMaterial.worldReflections);
                 glUniform1i(p.receivesShadow, command.receivesShadow);
                 glUniform2f(p.texScale, command.textureScale.x, command.textureScale.y);
                 glUniform2f(p.texOffset, command.textureOffset.x, command.textureOffset.y);
+                glUniform2f(p.facadeVerticalRange, command.facadeVerticalRange.x, command.facadeVerticalRange.y);
                 glUniform1f(p.lod, mode != RenderMode::Normal ? 0 : -1);
                 glUniform1f(p.ambientLight, ambient);
                 glUniform1f(p.alpha, command.opacity);
+                glUniform1f(p.alphaCutoff, command.alphaCutoff);
                 glUniform1f(p.affine, affineStrength(command.affineStrength));
             } else {
                 const auto& p = programs.road;
@@ -477,6 +562,7 @@ struct SceneRenderer::Impl {
                 glUniform1f(p.light, light);
                 glUniform1f(p.ambientLight, ambient);
                 glUniform1f(p.alpha, command.opacity);
+                glUniform1f(p.alphaCutoff, command.alphaCutoff);
                 glUniform1f(p.time, scene.time);
                 glUniform1f(p.heat, mode != RenderMode::Normal ? 0 : command.heat);
                 glUniform1f(p.affine, affineStrength(command.affineStrength));
@@ -521,6 +607,9 @@ struct SceneRenderer::Impl {
                 materialMaps(p, material.textures());
                 glUniform3f(p.color, material.baseColor[0], material.baseColor[1], material.baseColor[2]);
                 glUniform1i(p.hasTexture, material.texture.id() != 0);
+                glUniform1f(p.alphaCutoff, material.alphaCutoff);
+                glUniform1f(p.baseAlpha, material.baseColor[3]);
+                glUniform1i(p.doubleSided, material.doubleSided);
                 surfaceTexture(p, material.texture);
                 primitive.mesh.draw();
             }
@@ -534,6 +623,9 @@ struct SceneRenderer::Impl {
         for (const auto& primitive : command.model->primitives()) {
             const auto& material = primitive.material;
             glUniform1f(p.hasTexture, material.texture.id() != 0);
+            glUniform1f(p.alphaCutoff, material.alphaCutoff);
+            glUniform1f(p.baseAlpha, material.baseColor[3]);
+            glUniform1i(p.doubleSided, material.doubleSided);
             glUniform3f(p.baseColor, material.baseColor[0], material.baseColor[1], material.baseColor[2]);
             surfaceTexture(p, material.texture);
             primitive.mesh.draw();
@@ -616,9 +708,11 @@ struct SceneRenderer::Impl {
         glDepthMask(GL_FALSE);
         const auto& sky = programs.sky;
         sky.shader.bind();
+        cloudSky(sky.clouds, scene);
         const bool panorama = scene.sky.panorama && scene.sky.panorama->id();
         texture(sky.panorama, panorama ? scene.sky.panorama->id() : 0);
         glBindSampler(0, panorama ? panoramaSampler.id() : 0);
+        glUniform1f(sky.panoramaOffset, panoramaOffset(scene));
         glUniform1i(sky.hasPanorama, panorama);
         color(sky.topColor, scene.sky.top);
         color(sky.bottomColor, scene.sky.bottom);
@@ -693,6 +787,36 @@ struct SceneRenderer::Impl {
                 object);
         }
     }
+    void drawParticles(const Scene& world, const Scene& camera) const {
+        if (world.particles.empty()) {
+            return;
+        }
+        std::vector<const Quad*> ordered;
+        ordered.reserve(world.particles.size());
+        for (const auto& particle : world.particles) {
+            if (particle.opacity > .001f && (!capturingReflections || reflectionVisible(particle))) {
+                ordered.push_back(&particle);
+            }
+        }
+        const auto forward = normalize(camera.camera.target - camera.camera.position);
+        const auto depth = [&](const Quad* particle) {
+            return dot(center(*particle) - camera.camera.position, forward);
+        };
+        std::stable_sort(ordered.begin(), ordered.end(),
+                         [&](const auto* a, const auto* b) { return depth(a) > depth(b); });
+        glDepthMask(GL_FALSE);
+        // Texture particles use ordinary alpha blending. Their sprite pixels reduce PSX dither coverage as they fade.
+        if (psx()) {
+            glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ZERO, GL_ONE_MINUS_SRC_ALPHA);
+        }
+        for (const auto* particle : ordered) {
+            draw(*particle, camera);
+        }
+        glDepthMask(GL_TRUE);
+        if (psx()) {
+            glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+        }
+    }
     void renderReflectionWorld(const Scene& world, const Scene& camera) const {
         // Only opaque quads/cubes contribute to this depth prepass. Sprites and
         // imported props keep their normal alpha behavior over the captured sky.
@@ -708,7 +832,7 @@ struct SceneRenderer::Impl {
                     using T = std::decay_t<decltype(item)>;
                     if constexpr (std::is_same_v<T, Quad> || std::is_same_v<T, Cube>) {
                         if constexpr (std::is_same_v<T, Quad>) {
-                            if (item.opacity < 1) {
+                            if (item.opacity < 1 || item.alphaCutoff > 0) {
                                 return;
                             }
                         }
@@ -734,14 +858,16 @@ struct SceneRenderer::Impl {
         glDepthRange(0, 1);
         glEnable(GL_CLIP_DISTANCE0);
         drawReflectionWorld(world, camera);
+        drawParticles(world, camera);
         glDisable(GL_CLIP_DISTANCE0);
         glDepthFunc(GL_LESS);
     }
     void captureReflections(const Scene& scene) {
         reflectionsReady = false;
-        // With a supplied sky, distant panes sample that bitmap directly. Only
-        // local planar views render world geometry; no six-face sky/world bake.
-        if (!settings.worldReflectionMapSize || (scene.sky.panorama && scene.sky.panorama->id())) {
+        // Authored skies are sampled directly by distant panes. Only local
+        // planar views render geometry; no six-face sky/world bake is needed.
+        if (!settings.worldReflectionMapSize || scene.sky.hasTexturedClouds() ||
+            (scene.sky.panorama && scene.sky.panorama->id())) {
             return;
         }
         const bool hasGlass = std::any_of(scene.objects.begin(), scene.objects.end(), [](const auto& object) {
@@ -784,7 +910,7 @@ struct SceneRenderer::Impl {
             probe.camera.up = up[face];
             viewProjection = probe.camera.viewProjection(1);
             reflectionMap->bindFace(face);
-            glClearColor(scene.sky.bottom.r, scene.sky.bottom.g, scene.sky.bottom.b, 1);
+            clearSkyColor(scene);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
             renderReflectionWorld(scene, probe);
         }
@@ -905,7 +1031,7 @@ struct SceneRenderer::Impl {
             capture.viewProjection = viewProjection;
             reflectionClipPlane = {capture.normal.x, capture.normal.y, capture.normal.z, -capture.offset - .02f};
             capture.target->bind();
-            glClearColor(scene.sky.bottom.r, scene.sky.bottom.g, scene.sky.bottom.b, 1);
+            clearSkyColor(scene);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
             renderReflectionWorld(scene, reflected);
             capture.target->generateMipmaps();
@@ -1002,6 +1128,11 @@ struct SceneRenderer::Impl {
         glBindSampler(6, 0);
         glBindSampler(7, 0);
         glBindSampler(8, 0);
+        for (GLuint unit = 9; unit <= 11; ++unit) {
+            glBindSampler(unit, 0);
+            glActiveTexture(GL_TEXTURE0 + unit);
+            glBindTexture(GL_TEXTURE_2D, 0);
+        }
         glActiveTexture(GL_TEXTURE8);
         glBindTexture(GL_TEXTURE_2D, 0);
         glActiveTexture(GL_TEXTURE7);
@@ -1036,12 +1167,13 @@ struct SceneRenderer::Impl {
         } else {
             RenderTarget::bindDefault(drawable);
         }
-        glClearColor(scene.sky.bottom.r, scene.sky.bottom.g, scene.sky.bottom.b, 1);
+        clearSkyColor(scene);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         background(scene);
         for (const auto& command : scene.objects) {
             std::visit([&](const auto& item) { draw(item, scene); }, command);
         }
+        drawParticles(scene, scene);
         glDepthMask(GL_FALSE);
         // Additive world effects preserve the visible objects' dither mask.
         glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE, GL_ZERO, GL_ONE);
@@ -1075,6 +1207,11 @@ struct SceneRenderer::Impl {
         glBindSampler(6, 0);
         glBindSampler(7, 0);
         glBindSampler(8, 0);
+        for (GLuint unit = 9; unit <= 11; ++unit) {
+            glBindSampler(unit, 0);
+            glActiveTexture(GL_TEXTURE0 + unit);
+            glBindTexture(GL_TEXTURE_2D, 0);
+        }
         glActiveTexture(GL_TEXTURE8);
         glBindTexture(GL_TEXTURE_2D, 0);
         glActiveTexture(GL_TEXTURE7);

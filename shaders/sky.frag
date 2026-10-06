@@ -225,6 +225,10 @@ void main() {
     // pixel-sized on the PSX raster. This also filters distant noise at
     // the true pixel footprint rather than an artificially enlarged grid.
     vec3 ray = viewRay(vUv);
+    if (uHasCloudSky) {
+        FragColor = vec4(sampleCloudSky(ray), 1.0);
+        return; // Gradient and authored alpha sprites; no volumetric cloud marching.
+    }
     if (uHasPanorama) {
         vec3 color = samplePanorama(ray);
         FragColor = vec4(panoramaNight(color, night), 1.0);
