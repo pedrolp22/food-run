@@ -72,13 +72,20 @@ void WorldScene::addGrassPatch(float side, float innerX, float startZ, int colum
         command.surfaceMaterial = {1, 1, 1}; // The map separates dark paint from exposed metal highlights.
         scene_.objects.emplace_back(command);
     };
-    for (int column = 0; column < columns; ++column) {
-        for (int row = 0; row < rows; ++row) {
+    // A row is planar across X. Merge its contiguous cells while retaining the
+    // tile density, trimmed wall boundary and short segments along the road's curve.
+    for (int row = 0; row < rows; ++row) {
+        for (int column = 0; column < columns;) {
             if (!occupied(column, row)) {
+                ++column;
                 continue;
             }
-            const float tileWidth = columnDistance(column + 1) - columnDistance(column);
-            const auto p = groundPoint(column + tileWidth / (2 * kGrassTileSize), row + .5f);
+            const int firstColumn = column;
+            while (column < columns && occupied(column, row)) {
+                ++column;
+            }
+            const float tileWidth = columnDistance(column) - columnDistance(firstColumn);
+            const auto p = groundPoint((columnDistance(firstColumn) + tileWidth * .5f) / kGrassTileSize, row + .5f);
             auto& tile =
                 addTexturedQuad(assets_.texture(TextureId::Grass), {p.x, p.y, p.z, tileWidth, kGrassTileSize, 1},
                                 Face::Top, tileWidth / kGrassTileSize, 1, {0, 1, 0});
@@ -89,13 +96,21 @@ void WorldScene::addGrassPatch(float side, float innerX, float startZ, int colum
             }
             tile.normal = track_.normal(p.z, kGrassTileSize);
             // Left-side beds grow opposite to quad U; crop the final tile from the matching end to retain its seam.
-            tile.textureOffset = {grassOffset.x + column + (side < 0 ? 1 - tileWidth / kGrassTileSize : 0),
+            tile.textureOffset = {grassOffset.x + firstColumn +
+                                      (side < 0 ? column - firstColumn - tileWidth / kGrassTileSize : 0),
                                   grassOffset.y + row};
             tile.color = {tint, tint, tint};
             tile.pbrSurface = true;
             tile.surfaceMaterial = {1, 0, 1}; // Rough tufts and recessed dirt use their generated per-texel finish.
             tile.castsShadow = false;
-            if (!fenced) {
+        }
+    }
+    if (!fenced) {
+        return;
+    }
+    for (int column = 0; column < columns; ++column) {
+        for (int row = 0; row < rows; ++row) {
+            if (!occupied(column, row)) {
                 continue;
             }
             const bool openEntry =
@@ -107,12 +122,21 @@ void WorldScene::addGrassPatch(float side, float innerX, float startZ, int colum
             if (!occupied(column + 1, row) && !(buildingWall && column == columns - 1)) {
                 fence(column + 1, row, column + 1, row + 1, row);
             }
-            if (!occupied(column, row - 1)) {
-                fence(column, row, column + 1, row, column);
+        }
+    }
+    // Across-street edges are also straight; keep one cutout panel per exposed run.
+    for (int row = 0; row <= rows; ++row) {
+        for (int column = 0; column < columns;) {
+            const bool below = occupied(column, row - 1), above = occupied(column, row);
+            if (below == above) {
+                ++column;
+                continue;
             }
-            if (!occupied(column, row + 1)) {
-                fence(column, row + 1, column + 1, row + 1, column);
+            const int firstColumn = column++;
+            while (column < columns && occupied(column, row - 1) == below && occupied(column, row) == above) {
+                ++column;
             }
+            fence(firstColumn, row, column, row, firstColumn);
         }
     }
 }
@@ -171,7 +195,7 @@ void WorldScene::addParks(float roadScroll) {
         bool hasGrass = false;
         for (int lot = first - 1; lot <= last + 1; ++lot) {
             const auto lotSeed = streetLotSeed(lot, side);
-            if (!hasPocketPark(lotSeed)) {
+            if (!hasPocketPark(lot, side)) {
                 continue;
             }
             auto& plot = lots[lot - first + 1];
@@ -184,8 +208,8 @@ void WorldScene::addParks(float roadScroll) {
             const float zJitter = (hashFloat(seed, 4) - .5f) * (buildingSpacing - length - 2);
             plot.originalStart =
                 static_cast<int>(std::round((-lot * buildingSpacing + zJitter - length * .5f) / kGrassTileSize));
-            const bool farNeighbor = hasPocketPark(streetLotSeed(lot + 1, side));
-            const bool nearNeighbor = hasPocketPark(streetLotSeed(lot - 1, side));
+            const bool farNeighbor = hasPocketPark(lot + 1, side);
+            const bool nearNeighbor = hasPocketPark(lot - 1, side);
             plot.start = farNeighbor ? static_cast<int>(std::round(-(lot + .5f) * buildingSpacing / kGrassTileSize))
                                      : plot.originalStart;
             plot.end = nearNeighbor ? static_cast<int>(std::round(-(lot - .5f) * buildingSpacing / kGrassTileSize))
@@ -223,7 +247,7 @@ void WorldScene::addParks(float roadScroll) {
                 plot.corner < 2 ? globalRow < plot.start + plot.notchRows : globalRow >= plot.end - plot.notchRows;
             return !(plot.notched && cornerColumn && cornerRow);
         };
-        for (int lot = first; lot <= last; ++lot) {
+        for (int lot = first - 1; lot <= last + 1; ++lot) {
             const auto& plot = lots[lot - first + 1];
             if (!plot.present) {
                 continue;
@@ -233,6 +257,7 @@ void WorldScene::addParks(float roadScroll) {
                 entry = plot.originalStart + plot.rows / 2 - firstRow;
             }
             layout.entrances.push_back(entry);
+            sidewalkAccess_.push_back({side, roadScroll + (firstRow + entry + .5f) * kGrassTileSize, plot.seed, true});
         }
         // One UV grid and tint keep the connected lawn continuous across lot
         // boundaries; widths and outer corner notches still vary by lot.

@@ -4,6 +4,7 @@
 #include "engine/graphics/Texture.h"
 #include "engine/math/Math.h"
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <variant>
@@ -38,6 +39,13 @@ struct DirectionalLight {
     float ambientForNormal(math::Vec3 normal) const;
     float lightForNormal(math::Vec3 normal) const;
     math::Mat4 viewProjection() const;
+};
+inline constexpr std::size_t kMaxPointLights = 16; // Also supplies the material shader array capacity at compilation.
+struct PointLight {
+    math::Vec3 position;
+    Color color = {1, .78f, .36f}; // sRGB; uploaded as linear radiance for the shared material shading.
+    float intensity = 1;
+    float radius = 11; // Smooth finite falloff; local lights do not add shadow-map passes.
 };
 struct SkyPalette {
     Color top;
@@ -141,6 +149,7 @@ struct ModelInstance {
     const Model* model = nullptr;
     bool pbrSurface = false;                           // Use each primitive's imported material factors.
     std::optional<SurfaceMaterial> materialOverride{}; // Optional finish override for this instance only.
+    float emissiveScale = 1; // PBR emission multiplier; zero switches off the imported luminous texels.
 };
 struct SpriteRipple {
     const SpriteOutline* shape = nullptr;
@@ -180,5 +189,6 @@ struct Scene {
     std::vector<EffectCommand> effects;                  // Additive, depth-tested, no depth writes or shadow casting.
     std::optional<math::Vec3> reflectionProbePosition{}; // Empty captures the world at the camera position.
     std::vector<Quad> particles; // Alpha-blended surfaces, sorted per camera; no depth writes or shadow casting.
+    std::vector<PointLight> pointLights; // Up to kMaxPointLights active local lights on PBR surfaces, in every view.
 };
 } // namespace engine::graphics

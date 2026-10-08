@@ -43,15 +43,14 @@ float materialFactor(const JsonValue& node, const char* name, float fallback) {
     if (!value) {
         return fallback;
     }
-    if (value->type != JsonValue::Type::Number || !std::isfinite(value->number) ||
-        value->number < 0 || value->number > 1) {
+    if (value->type != JsonValue::Type::Number || !std::isfinite(value->number) || value->number < 0 ||
+        value->number > 1) {
         throw std::runtime_error(std::string("Invalid glTF material factor: ") + name);
     }
     return static_cast<float>(value->number);
 }
 
-std::filesystem::path materialTexturePath(const JsonValue& root, const JsonValue* info,
-                                         const std::string& baseDir) {
+std::filesystem::path materialTexturePath(const JsonValue& root, const JsonValue* info, const std::string& baseDir) {
     if (!info) {
         return {};
     }
@@ -468,6 +467,32 @@ ModelData loadModel(const std::filesystem::path& path, float targetHeight) {
             if (const JsonValue* materialNode = primitive->obj("material")) {
                 const JsonValue* material = materials ? materials->at(materialNode->asInt(0)) : nullptr;
                 if (material) {
+                    if (const auto* emission = material->obj("emissiveFactor")) {
+                        if (emission->type != JsonValue::Type::Array || emission->size() != 3) {
+                            throw std::runtime_error("Invalid glTF emissive factor");
+                        }
+                        for (int i = 0; i < 3; ++i) {
+                            const auto* value = emission->at(i);
+                            if (value->type != JsonValue::Type::Number || !std::isfinite(value->number) ||
+                                value->number < 0 || value->number > 1) {
+                                throw std::runtime_error("Invalid glTF emissive factor");
+                            }
+                            data.material.emissiveFactor[i] = static_cast<float>(value->number);
+                        }
+                    }
+                    data.material.emissiveTexture =
+                        materialTexturePath(root, material->obj("emissiveTexture"), baseDir);
+                    if (const auto* extensions = material->obj("extensions")) {
+                        if (const auto* emission = extensions->obj("KHR_materials_emissive_strength")) {
+                            if (const auto* strength = emission->obj("emissiveStrength")) {
+                                if (strength->type != JsonValue::Type::Number || !std::isfinite(strength->number) ||
+                                    strength->number < 0 || strength->number > std::numeric_limits<float>::max()) {
+                                    throw std::runtime_error("Invalid glTF emissive strength");
+                                }
+                                data.material.emissiveStrength = static_cast<float>(strength->number);
+                            }
+                        }
+                    }
                     if (const auto* mode = material->obj("alphaMode"); mode && mode->string == "MASK") {
                         data.material.alphaCutoff = materialFactor(*material, "alphaCutoff", .5f);
                     }

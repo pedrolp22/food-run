@@ -28,6 +28,13 @@ Model::Model(const assets::ModelData& data) {
         primitive.material.packedReflectivity = source.material.packedReflectivity;
         primitive.material.alphaCutoff = source.material.alphaCutoff;
         primitive.material.doubleSided = source.material.doubleSided;
+        for (std::size_t i = 0; i < primitive.material.emissiveFactor.size(); ++i) {
+            primitive.material.emissiveFactor[i] = source.material.emissiveFactor[i] * source.material.emissiveStrength;
+        }
+        if (!source.material.emissiveTexture.empty()) {
+            primitive.material.emissive = Texture(source.material.emissiveTexture,
+                                                  {TextureFilter::Mipmapped, source.material.baseTextureRepeat, false});
+        }
         if (!source.material.baseTexture.empty()) {
             const auto filter = source.material.baseTextureNearest ? TextureFilter::Nearest : TextureFilter::Linear;
             primitive.material.texture =

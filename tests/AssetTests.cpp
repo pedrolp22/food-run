@@ -124,8 +124,12 @@ void assetTests() {
     distanceFieldChecks();
     spriteGeometryChecks();
     using namespace engine::assets;
-    for (const auto& [name, count] : {std::pair{"traffic_cone", 3}, {"barrier", 4}, {"trash_can", 1}, {"bench", 2},
-                                    {"tree", 1}}) {
+    for (const auto& [name, count] : {std::pair{"traffic_cone", 3},
+                                      {"barrier", 4},
+                                      {"trash_can", 1},
+                                      {"bench", 2},
+                                      {"tree", 1},
+                                      {"street_lamp", 1}}) {
         const auto model = loadGltf(std::filesystem::path(TEST_ASSET_DIR) / "models" / name / "scene.gltf", 2);
         CHECK(model.primitives.size() == static_cast<std::size_t>(count));
         float low = 1e9f, high = -1e9f;
@@ -203,6 +207,27 @@ void assetTests() {
     CHECK(near(bench.primitives[1].material.roughness, .2f));
     CHECK(bench.primitives[0].material.normalTexture.filename() == "Material.001_normal.png");
     CHECK(bench.primitives[1].material.normalTexture.filename() == "Material.002_normal.png");
+    const auto lamp = loadGltf(std::filesystem::path(TEST_ASSET_DIR) / "models/street_lamp/scene.gltf");
+    const auto& bulb = lamp.primitives[0].material;
+    CHECK(bulb.emissiveTexture.filename() == "Material.001_emissive.png");
+    CHECK(bulb.emissiveFactor == (std::array<float, 3>{1, 1, 1}));
+    CHECK(near(bulb.emissiveStrength, 2.6788432f));
+    CHECK(triangle.primitives[0].material.emissiveFactor == (std::array<float, 3>{0, 0, 0}));
+    for (const char* invalid : {"[1,-0.1,1]", "[1,1.1,1]", "[1,true,1]", "[1,1]", "false"}) {
+        auto invalidEmission = materialJson;
+        replace(invalidEmission, "\"pbrMetallicRoughness\":",
+                std::string("\"emissiveFactor\":") + invalid + ",\"pbrMetallicRoughness\":");
+        fixture.json(invalidEmission);
+        checkThrows([&] { loadGltf(path); });
+    }
+    for (const char* invalid : {"-1", "1e40", "true"}) {
+        auto invalidEmission = materialJson;
+        replace(invalidEmission, "\"pbrMetallicRoughness\":",
+                std::string("\"extensions\":{\"KHR_materials_emissive_strength\":{\"emissiveStrength\":") + invalid +
+                    "}},\"pbrMetallicRoughness\":");
+        fixture.json(invalidEmission);
+        checkThrows([&] { loadGltf(path); });
+    }
     // External material images share UV0 and retain linear data/scales separately from albedo.
     Fixture mappedFixture;
     constexpr float uv[] = {0, 0, 1, 0, 0, 1};
@@ -237,10 +262,9 @@ void assetTests() {
     CHECK(mapped.normalTexture == mappedFixture.directory / "normal.png");
     CHECK(near(mapped.normalScale, .35f) && near(mapped.occlusionStrength, .5f));
     CHECK(!mapped.packedReflectivity); // Standard glTF data must ignore alpha in a metallic-roughness map.
-    for (const auto& [from, to] : {std::pair{"\"scale\":0.35", "\"scale\":true"},
-                                  std::pair{"\"strength\":0.5", "\"strength\":1.5"},
-                                  std::pair{"\"index\":2", "\"index\":9999"},
-                                  std::pair{"\"index\":2", "\"index\":2,\"texCoord\":1"}}) {
+    for (const auto& [from, to] :
+         {std::pair{"\"scale\":0.35", "\"scale\":true"}, std::pair{"\"strength\":0.5", "\"strength\":1.5"},
+          std::pair{"\"index\":2", "\"index\":9999"}, std::pair{"\"index\":2", "\"index\":2,\"texCoord\":1"}}) {
         auto invalidMap = mappedJson;
         replace(invalidMap, from, to);
         mappedFixture.json(invalidMap);

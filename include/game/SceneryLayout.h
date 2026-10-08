@@ -22,8 +22,31 @@ inline unsigned int streetLotSeed(int lot, float side) {
 inline unsigned int parkSeed(unsigned int lotSeed) {
     return lotSeed ^ engine::math::hashSeed(GameConfig::kParkLayoutSeed);
 }
-inline bool hasPocketPark(unsigned int lotSeed) {
-    return engine::math::hashFloat(lotSeed, 10) >= GameConfig::kStreetBuildingChance &&
-           engine::math::hashFloat(parkSeed(lotSeed), 0) < GameConfig::kPocketParkChance;
+inline unsigned int streetBlockSeed(int lot, float side) {
+    static_assert(GameConfig::kStreetBlockLots >= 2);
+    const int block = lot / GameConfig::kStreetBlockLots - (lot % GameConfig::kStreetBlockLots < 0 ? 1 : 0);
+    return streetLotSeed(block, side) ^ engine::math::hashSeed(GameConfig::kStreetLayoutSeed);
+}
+inline bool hasStreetBuilding(int lot, float side) {
+    const float chance = std::clamp(GameConfig::kStreetBuildingChance +
+                                        (engine::math::hashFloat(streetBlockSeed(lot, side), 10) - .5f) * .5f,
+                                    0.0f, 1.0f);
+    return GameConfig::kStreetBuildingChance >= 1 ||
+           (GameConfig::kStreetBuildingChance > 0 && engine::math::hashFloat(streetLotSeed(lot, side), 10) < chance);
+}
+inline bool streetBrick(int lot, float side, int column = 0) {
+    const float base = column == 0 ? GameConfig::kStreetBrickChance : .55f;
+    const float chance =
+        std::clamp(base + (engine::math::hashFloat(streetBlockSeed(lot, side), 1) - .5f) * .7f, 0.0f, 1.0f);
+    return base >= 1 ||
+           (base > 0 &&
+            engine::math::hashFloat(streetLotSeed(lot, side) + static_cast<unsigned int>(column) * 353u, 1) < chance);
+}
+inline bool streetNearSidewalk(int lot, float side) {
+    return engine::math::hashFloat(streetBlockSeed(lot, side), 11) < GameConfig::kStreetNearSidewalkChance;
+}
+inline bool hasPocketPark(int lot, float side) {
+    return !hasStreetBuilding(lot, side) &&
+           engine::math::hashFloat(parkSeed(streetLotSeed(lot, side)), 0) < GameConfig::kPocketParkChance;
 }
 } // namespace game::scenery

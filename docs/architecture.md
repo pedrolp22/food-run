@@ -29,6 +29,24 @@ It owns the passes and shader bindings but has no game configuration, gameplay s
 Its targets can be used independently through `add_subdirectory`; the platform library can be disabled to remove
 the SDL build requirement while retaining OpenGL rendering.
 
+The rendering implementation separates policy from draw submission:
+
+- `PlanarReflectionPass` owns facade grouping, occlusion, capture history, refresh scheduling and persistent targets.
+  `update()` returns a borrowed span of camera/projection/viewport descriptions; the renderer draws those views and
+  generates their mipmaps. `binding()` returns the texture, projection, populated UV extent and fade for one surface.
+  Other passes can use this component without sharing `SceneRenderer::Impl` or knowing its programs.
+- `SceneVisibility` prepares world bounds once and tests them against any camera, light or reflection volume. It has no
+  GL calls. Clip planes and conservative PSX raster padding are inputs, rather than global renderer state.
+- `FrameLighting` prepares linear sky/sun colors and validated point-light arrays once per frame. Mirrored views reuse
+  that data and change only camera-dependent uniforms. The shader light-array capacity comes from `kMaxPointLights`;
+  changing it does not require editing a second literal in GLSL.
+- `RenderSettings.h` exposes settings without pulling in the renderer or scene. `validate()` needs no GPU context.
+  Reflection detail/refresh thresholds and dielectric reflectance are explicit inputs with backward-compatible defaults.
+
+These components own reusable buffers. Reflection groups use two histories to retain per-building vector storage;
+matching/slot tables, projected corners and returned views avoid repeated temporary allocations. `RenderState` remains
+responsible for cached GL bindings, including invalidation when a pass allocates or generates reflection textures.
+
 ## Resource ownership
 
 1. Create and make current the window's OpenGL context.
@@ -53,7 +71,7 @@ The provided `Window` performs that initialization and requests a core OpenGL 3.
 
 The renderer controls GL state during a frame. It renders to framebuffer zero and returns with depth testing and
 alpha blending enabled, depth writes enabled, polygon offset disabled, the default framebuffer bound,
-texture unit zero active, and no shader program, VAO, or sampler on units zero through eleven bound. Multisampling is enabled;
+texture unit zero active, and no shader program, VAO, or sampler on units zero through thirteen bound. Multisampling is enabled;
 alpha-to-coverage, sample coverage, and sample masking are disabled. It does not preserve arbitrary caller GL state.
 Applications with an additional UI/rendering pass should set that pass's state explicitly.
 
@@ -62,17 +80,37 @@ Quad normals are world-space normals; cube and model normals use the inverse tra
 Use positive, nonzero model scale components unless a deliberately mirrored transform is required.
 
 Scene objects retain submission order. Cubes, models, sprites, and textured or colored quads participate in the shadow pass.
+World-space bounds are prepared once per frame and tested against each view's frustum, including the main camera and
+directional shadow volume. Offscreen shadow casters remain eligible when they intersect the light's volume. Imported
+models use their actual bounds; main-view sprites retain their full authored extrusion and separate ripple drawing.
+Particle storage is reused across views, with depth computed once per visible particle and source order retained at
+equal depths. `RenderState` caches scalar/vector uniforms per shader and texture/sampler bindings within a frame;
+it forgets caller state at frame entry and invalidates bindings changed by target allocation or mip generation.
 Quads can opt out of casting or receiving shadows. Their `opacity` fades the whole surface; the quad texture supplies RGB.
 `Material.h` defines the shared PBR-like finish. Set `Quad::pbrSurface` for textured or colored street surfaces,
 or `Cube::pbrSurface` for solid geometry; both use `surfaceMaterial`. Set `ModelInstance::pbrSurface` to use each imported
 primitive's finish, with an optional `materialOverride` for that instance. Commands without these flags retain the original
 lighting path. The game enables the shared finish on asphalt, sidewalks, ground, curbs, the player, and model props.
+`Scene::pointLights` supplies up to 16 local lights for these shared materials, with sRGB color, linear intensity and
+a finite radius. A smooth distance falloff drives diffuse and roughness-dependent specular response independently
+of directional shadows. Light arrays upload once per material program per view and are also copied into planar
+and cubemap captures. They require no additional render targets or shadow passes.
+Imported emissive factors and textures add linear radiance before the material highlight shoulder; texture unit 13
+uses the primitive's wrapping and the usual nearest retro sampling. `ModelInstance::emissiveScale` controls PBR emission
+per instance, and material state resets before other geometry. Curbside lamps use the same dusk/night blend for their
+bulb emission and local light intensity; the game places their normalized glTF pole and bulb anchors separately so
+the base remains on the sidewalk while the arm points over the road. Benches and bins leave clearance around posts.
 Road and sidewalk maps give each source texel its own roughness and reflectivity: paint is smoother than asphalt, tar and
 dirt are duller, and brighter aggregate catches more light. Concrete stays mostly rough, with restrained stone glints.
-Brick and roof maps separate mortar, masonry and dirt. Curbs use roughness 0.94, surrounding ground uses 0.96,
+Brick and roof maps separate mortar, masonry and dirt. Curbs use roughness 0.94, surrounding ground uses mapped concrete,
 and the blue player uses a 0.45 plastic finish. Model props retain their authored roughness/metallic factors: bench wood is
 rough and dielectric, its supports are smooth metal, and cones/barriers retain their separate plastic/rubber finishes.
 Textured props add local finish variation and use their authored normal maps where available.
+
+Bare ground beyond the sidewalk uses `textures/concretetiles.png`, including forecourts, gaps between buildings and
+garden access paths. `kConcreteTileSize` sets the world width of one texture repeat (default 1.8, or 0.6 per pictured
+slab). UVs share a wrapped world-scroll phase, so adjacent and recycled road segments align. The concrete profile
+generates matching surface, height and normal maps; these grounds use the shared rough dielectric material.
 
 `Quad::materialTextures` supplies optional borrowed property, tangent-space normal and occlusion textures, also supported
 by building quads. `Model` owns the corresponding maps per primitive. All maps follow the color texture's UV tiling,
@@ -122,10 +160,13 @@ Brick buildings use the tileable `brick_building_window.png` and `brick_building
 `brick_building_door.png`. Front and street-facing sides receive complete window tiles, preserving their source aspect;
 rear and outward sides, facade margins and roof bands use plain brick. `GameConfig::kBrickFacadeTileWidth` sets
 their world size (1.8 units). Brick footprints use whole tiles: the default `kBrickBuildingWidthTiles` (2) and
-`kBrickBuildingDepthTiles` (6) produce a 3.6-by-10.8-unit building with six window bays along the street. Heights alternate
+`kBrickBuildingDepthTiles` (6) produce a 3.6-by-10.8-unit building with six window bays along the street. Heights vary
 between `kBrickBuildingMinFloors` and `kBrickBuildingMaxFloors` (3–4), with whole floor heights derived from the window
 texture's aspect and a `kBrickBuildingRoofBandHeight` (0.18) above them. Brick lots have no lateral or longitudinal jitter.
-The frontage row uses stable per-lot random choices. `kStreetBuildingChance` (0.68) controls occupancy; empty lots reveal
+The frontage row uses stable per-lot choices influenced by four-lot blocks (`kStreetBlockLots`, `kStreetLayoutSeed`).
+Neighboring residential lots share floor counts and close/recessed frontage choices; forecourt depths have limited
+per-lot variation. Tower heights, brick/tower mix and occupancy also share a block bias.
+`kStreetBuildingChance` (0.68) controls mean occupancy; empty lots reveal
 the scenery behind them. Occupied lots use `kStreetBrickChance` (0.72) to mix brick buildings and towers.
 `kStreetNearSidewalkChance` (0.45) places some at the regular `kBrickBuildingSetback` (0.3); others sit farther back by
 `kStreetExtraSetbackMin`–`kStreetExtraSetbackMax` (1.4–3.4). The whole lot, including its background columns, shares that
@@ -175,15 +216,26 @@ Glass is represented by a dielectric coat over an opaque backing. Coated glass d
 incidence and a backing brightness of 0.18, making local reflections readable; use `reflectance = 0.04` for uncoated glass.
 Both controls are clamped to zero through one. Higher roughness gives a wider, softer lobe and blurred environment response;
 zero reflectivity disables both sun and environment specular. Buildings remain opaque without modeled interiors/refraction.
-The shared `material.glsl` shader uses GGX, height-correlated Smith visibility, Schlick Fresnel,
-and energy-weighted Lambert diffuse
-([model reference](https://google.github.io/filament/main/filament.html#materialsystem/standardmodel)). Textures, tints and
-light colors are decoded from sRGB for lighting, then encoded once after a highlight shoulder. Imported glTF base-color
-factors are already linear and multiply decoded texture colors without a second conversion. Sun specular follows the
-actual per-fragment world position, view direction and light color, and shares shadow visibility with diffuse lighting.
-Disabling shadow reception does not disable directional shading. Fresnel strengthens reflections at grazing views.
-Indirect illumination and rough reflections use an analytic sky/ground environment derived from the scene's sky colors,
-with an [analytic environment BRDF fit](https://www.unrealengine.com/en-US/blog/physically-based-shading-on-mobile).
+The scene-independent `brdf.glsl` library uses GGX, height-correlated Smith visibility and Schlick Fresnel
+([specular reference](https://google.github.io/filament/main/filament.html#materialsystem/standardmodel)). Its diffuse
+response uses the roughness-dependent Disney/Burley model with the Frostbite energy normalization
+([course notes](https://seblagarde.wordpress.com/2015/07/14/siggraph-2014-moving-frostbite-to-physically-based-rendering/)).
+Rough brick/asphalt scatter differently from smooth pigment. Scaled GGX compensation retains light lost by
+single-scattering rough metals. It uses a compact analytic directional-energy estimate, then normalizes the existing
+[environment BRDF fit](https://www.unrealengine.com/en-US/blog/physically-based-shading-on-mobile) to that energy.
+This is an approximation rather than a full multiple-scattering integration: the HDR hemisphere tests require rough
+white metals to return at least 80% of incident energy and stay below 107% over the tested roughness/view range. No BRDF lookup texture or additional render pass is required.
+`prepareBrdf()` computes view/material terms once; the sun, lamps and environment share that state. Normal variance
+filters roughness consistently across all three, while the sun also widens subpixel glints at its raster footprint.
+Diffuse AO and [view-dependent specular occlusion](https://google.github.io/filament/main/filament.html#lighting/occlusion/specularocclusion)
+are separate, preserving smooth front-facing reflections while dimming occluded rough reflections.
+
+`material.glsl` applies that library to scene lighting, shadows and the analytic sky/ground environment. Base textures
+and tints decode from sRGB; light colors decode once on the CPU per frame. Output encodes once after the highlight
+shoulder. Imported glTF factors remain linear. `SurfaceMaterial::reflectance` supplies dielectric F0 (default 0.04);
+metals use their base color and panes retain their independent `WindowMaterial::reflectance` override.
+Zero reflectivity disables direct and indirect specular. Sun specular uses the actual world/view/light directions and
+shares shadow visibility with diffuse light; disabling shadow reception retains directional shading.
 Nearby glass uses live planar captures of the sky, character, roads, sidewalks, buildings and props.
 The renderer mirrors the main camera across the facade plane and projects the result
 onto the actual window positions. Geometry behind the plane is clipped, preventing the hosting building from covering
@@ -209,8 +261,10 @@ zero disables world reflections, including local captures and authored sky refle
 zero disables planar captures while retaining the distant environment fallback.
 `maxPlanarReflections` sets the high-detail budget (default 6); zero disables planar captures. All other visible planes
 retain lower-resolution live views at `distantPlanarReflectionSize` (default 128, positive). The budget changes detail,
-not reflection presence. Nonpriority planes gain detail gradually between 90 and 35 units using their shared building
-distance, reaching full nearby resolution. `planarReflectionDistance` limits distance to the nearest related face, or to the
+not reflection presence. Nonpriority planes gain detail gradually between `distantPlanarReflectionDetailDistance` (default 90) and
+`nearPlanarReflectionDistance` (default 35) using their shared building distance, reaching full nearby resolution.
+The latter also controls the always-refresh distance. Both thresholds are validated and can be configured independently
+of the maximum capture distance. `planarReflectionDistance` limits distance to the nearest related face, or to the
 individual facade when ungrouped (default 120). `planarReflectionFadeDistance` (default 30) blends local captures into
 the distant environment between 90 and 120 units, reaching zero before a capture is dropped.
 `Quad::reflectionId` optionally identifies a facade across rebuilt/moving scenes. Game IDs encode the lot, column,
@@ -223,6 +277,10 @@ Selected planes receive a 20% detail-priority preference, with resolution change
 changes reset selection. Nearby views (within 35 units), detailed planes and ungrouped facades update every frame.
 Other grouped views remain populated between staggered refreshes at `distantPlanarReflectionUpdateSeconds` (default .2;
 zero updates every frame). Stable building identities distribute refresh phases; new faces capture immediately.
+`maxDistantPlanarUpdatesPerFrame` (default 4; 0 is unlimited) limits scheduled refresh work while keeping already captured
+views visible. Oldest updates take priority, and due faces from one building update together even if that building alone
+exceeds the budget. Newly visible faces, nearby/detail-priority views, camera changes and zero refresh intervals bypass
+the limit. At a busy moment, a distant refresh can run a few frames later than its nominal interval.
 Between refreshes, the saved projection follows the building's translation to retain mapping during small scrolling
 movements. Camera translation over .5 units, orientation changes or projection changes also force a refresh.
 `WindowMaterial::worldReflections = false` selects only the analytic environment per facade. Capture slots and their
@@ -359,6 +417,13 @@ outer corner notches, sidewalk entrances and per-lot tree groups preserve variat
 outside the visible lot range so scrolling never adds a divider through an existing park. Separate lots retain gaps, and
 brick forecourt gardens are split around a clear entrance corridor. Gardens anchor to the straight facade, with partial
 grass tiles filling their exact width and no fence against the building wall. Texture repeats follow the trimmed width.
+Contiguous cells across each row use a single grass surface, retaining short curved segments and their original UV grid.
+Straight fence runs across the lawn merge too; fences along the road retain curve-following subdivisions.
+Benches and bins use the generated park gates and building access paths rather than an independent prop grid. Their
+footprints leave entrances and lamp bases clear. Benches follow the sidewalk tangent and slope using the imported seat's
+Z axis; only that axis is shortened to `kStreetBenchLength` (2.2), preserving the imported seat depth and height.
+Street lamps use 4.8-unit height and staggered 32-unit slots, with seeded jitter and 80% occupancy. Placement avoids
+building paths and park gates, with stable positions while scrolling. The `kStreetLamp*` settings control this layout.
 Model scale is limited by neighboring facade clearance.
 
 The directional light's `ShadowVolume` is a stable world-space orthographic region. Size it to cover the scene's casters
@@ -534,7 +599,8 @@ after scene composition. The fisheye lens is a separate camera effect.
 
 The importer handles glTF JSON with one external binary buffer, an active scene hierarchy, indexed triangle primitives,
 FLOAT positions/normals/UVs, unsigned indices, node transforms, base-color textures/factors, scalar roughness/metallic
-factors, and external metallic/roughness, normal and occlusion textures using `TEXCOORD_0`.
+factors, and external metallic/roughness, normal, occlusion and emissive textures using `TEXCOORD_0`.
+Linear emissive factors and `KHR_materials_emissive_strength` are retained; emissive textures decode from sRGB.
 Both material factors default to 1; metallic/roughness maps use linear G/B channels, tangent-space normal maps use RGB,
 and occlusion uses linear R, as specified by [glTF 2.0](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#materials).
 Normal scale and occlusion strength are retained, with shared metallic/roughness and occlusion images uploaded once.
@@ -549,7 +615,7 @@ and normalizes to the requested height. Missing normals are generated from trian
 Errors are reported as exceptions rather than dereferencing missing or out-of-range data.
 
 GLB containers, embedded/data-URI buffers/images, multiple buffers, sparse accessors, compressed meshes, animations,
-skinning, extra UV sets, emissive maps, and full PBR extensions/blended alpha materials are not implemented.
+skinning, extra UV sets, other PBR extensions/blended alpha materials are not implemented.
 Add a format adapter producing `assets::ModelData` to extend import without changing GPU ownership or scene submission.
 The bundled model licenses remain with their original files.
 

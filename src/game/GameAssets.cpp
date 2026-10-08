@@ -26,6 +26,7 @@ constexpr std::array textures = {
     TextureSpec{TextureId::Burger, "textures/collectibles/burger.png", false},
     TextureSpec{TextureId::Fries, "textures/collectibles/fries.png", false},
     TextureSpec{TextureId::Sidewalk, "textures/sidewalk.png", true, true},
+    TextureSpec{TextureId::ConcreteTiles, "textures/concretetiles.png", true, true},
     TextureSpec{TextureId::BuildingTop, "textures/skyscraper/building_top.png", false, true},
     TextureSpec{TextureId::Skybox, "textures/sky/skybox.png", false},
     TextureSpec{TextureId::Cloud1, "textures/sky/cloud1.png", false},
@@ -38,10 +39,10 @@ constexpr std::array textures = {
     TextureSpec{TextureId::Fence, "textures/grassy/spikedfence_decor.png", true, true},
     TextureSpec{TextureId::Leaf, "textures/grassy/leaf.png", false, true},
     TextureSpec{TextureId::Moon, "textures/sky/moon.png", false}};
-constexpr std::array models = {ModelSpec{ModelId::Cone, "traffic_cone", 1.0f},
-                               ModelSpec{ModelId::Barrier, "barrier", 0.9f},
-                               ModelSpec{ModelId::TrashCan, "trash_can", 0.75f},
-                               ModelSpec{ModelId::Bench, "bench", 0.7f}, ModelSpec{ModelId::Tree, "tree", 1.0f}};
+constexpr std::array models = {
+    ModelSpec{ModelId::Cone, "traffic_cone", 1.0f},   ModelSpec{ModelId::Barrier, "barrier", 0.9f},
+    ModelSpec{ModelId::TrashCan, "trash_can", 0.75f}, ModelSpec{ModelId::Bench, "bench", 0.7f},
+    ModelSpec{ModelId::Tree, "tree", 1.0f},           ModelSpec{ModelId::StreetLamp, "street_lamp", 1.0f}};
 static_assert(textures.size() == static_cast<std::size_t>(TextureId::Count));
 static_assert(models.size() == static_cast<std::size_t>(ModelId::Count));
 TextureId collectibleTexture(const Entity& entity) {

@@ -29,9 +29,10 @@ enum class TextureId {
     Fence,
     Leaf,
     Moon,
+    ConcreteTiles,
     Count
 };
-enum class ModelId { Cone, Barrier, TrashCan, Bench, Tree, Count };
+enum class ModelId { Cone, Barrier, TrashCan, Bench, Tree, StreetLamp, Count };
 // The game's asset catalog; the graphics library knows no asset names or game rules.
 class GameAssets {
   public:

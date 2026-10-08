@@ -18,6 +18,7 @@ uniform vec3 uFaceNormal;
 uniform float uSurfaceRoughness;
 uniform float uSurfaceMetallic;
 uniform float uSurfaceReflectivity;
+uniform float uSurfaceReflectance;
 uniform float uWindowRoughness;
 uniform float uWindowReflectivity;
 uniform bool uHasWindows;
@@ -70,7 +71,7 @@ void main() {
     vec3 geometricNormal = normalize(uFaceNormal);
     vec3 mappedNormal = materialNormal(tc, vTexCoord, geometricNormal, vWorldPosition);
     vec3 normal = mappedFacade ? mappedNormal : normalize(mix(mappedNormal, geometricNormal, glass));
-    float noL = max(dot(normal, normalize(uSunDir)), 0.0);
+    float noL = max(dot(normal, uSunDir), 0.0);
     float visibility = uReceivesShadow ? sunVisibility(noL) : 1.0;
     float ambient = clamp(uAmbientLight, 0.0, 1.0);
     vec2 shade = vec2(ambient, (1.0 - ambient) * noL);
@@ -80,6 +81,9 @@ void main() {
                               : mix(materialOcclusion(tc, vTexCoord), 1.0, glass);
     vec3 toCamera = uCameraPosition - vWorldPosition;
     vec3 view = toCamera / max(length(toCamera), 0.00001);
+    MaterialBrdf material = materialBrdf(albedo, normal, view, roughness, metallic, reflectivity,
+                                           mix(uSurfaceReflectance, uWindowReflectance, glass));
+    roughness = material.roughness;
     vec3 reflection = reflect(-view, normal);
     vec3 environment = reflectedEnvironment(reflection, normal, clamp(roughness, 0.08, 1.0));
     vec3 worldEnvironment = environment;
@@ -96,7 +100,7 @@ void main() {
     if (uHasWorldReflection && glass > 0.0) {
         // The sRGB cubemap supplies decoded linear radiance to the BRDF.
         // The geometric reflection ray stays fixed as roughness blurs the mip chain.
-        float lod = pow(clamp(roughness, 0.0, 1.0), 2.0) * uWorldReflectionMaxLod;
+        float lod = (roughness * roughness) * uWorldReflectionMaxLod;
         vec3 world = textureLod(uWorldReflection, reflection, lod).rgb;
         worldEnvironment = world;
     }
@@ -107,7 +111,7 @@ void main() {
         vec2 reflectionUv = projected.xy / max(projected.w, 0.00001) * 0.5 + 0.5;
         if (projected.w > 0.0 && all(greaterThanEqual(reflectionUv, vec2(0.0))) &&
             all(lessThanEqual(reflectionUv, vec2(1.0)))) {
-            float lod = pow(clamp(roughness, 0.0, 1.0), 2.0) * uPlanarReflectionMaxLod;
+            float lod = (roughness * roughness) * uPlanarReflectionMaxLod;
             // Persistent buffers may be larger than the current cropped view.
             // Sample only its populated viewport, including at blurred mip levels.
             vec2 texelRadius = vec2(exp2(lod) * 0.5) / vec2(textureSize(uPlanarReflection, 0));
@@ -120,9 +124,8 @@ void main() {
     // Apply the pane mask once, after choosing the capture. Reapplying it at
     // each stage leaves a displaced cubemap image underneath the planar one.
     environment = mix(environment, worldEnvironment, glass);
-    vec3 radiance = materialRadianceEnvironment(albedo, normal, vWorldPosition, shade, visibility,
-                                               roughness, metallic, reflectivity, occlusion, environment,
-                                               mix(0.04, uWindowReflectance, glass));
+    vec3 radiance = materialRadianceEnvironment(material, normal, vWorldPosition, view, shade, visibility,
+                                               occlusion, environment);
     vec3 surface = mix(displayColor(radiance), uHazeColor, clamp(uHaze, 0.0, 1.0));
     FragColor = vec4(distanceFog(surface), uAlpha);
 }

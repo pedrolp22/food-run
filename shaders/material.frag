@@ -14,6 +14,7 @@ uniform vec3 uColor;
 uniform float uSurfaceRoughness;
 uniform float uSurfaceMetallic;
 uniform float uSurfaceReflectivity;
+uniform float uSurfaceReflectance;
 uniform float uLod;
 uniform float uAmbient;
 uniform bool uVertexLighting;
@@ -23,6 +24,9 @@ uniform float uAlpha;
 uniform float uAlphaCutoff;
 uniform float uBaseAlpha;
 uniform bool uDoubleSided;
+uniform sampler2D uEmissiveTexture;
+uniform bool uHasEmissiveTexture;
+uniform vec3 uEmissiveFactor;
 uniform float uHaze;
 uniform float uTime;
 uniform float uHeat;
@@ -51,17 +55,21 @@ void main() {
     vec3 normal = materialNormal(tc, vTexCoord, geometricNormal, vWorldPosition);
     vec3 properties = materialProperties(tc, vTexCoord);
     float occlusion = materialOcclusion(tc, vTexCoord);
-    float noL = max(dot(normal, normalize(uSunDir)), 0.0);
+    float noL = max(dot(normal, uSunDir), 0.0);
     float ambient = clamp(uAmbient * (0.95 + 0.30 * normal.y), 0.0, 1.0);
     vec2 shade = uVertexLighting && !backFace ? vVertexLight : vec2(ambient, (1.0 - ambient) * noL);
     if (uVertexLighting && uHasNormalMap && !backFace) {
-        float geometricLight = max(dot(geometricNormal, normalize(uSunDir)), 0.0);
+        float geometricLight = max(dot(geometricNormal, uSunDir), 0.0);
         shade.y = max(shade.y + (1.0 - ambient) * (noL - geometricLight), 0.0);
     }
     float visibility = uReceivesShadow ? sunVisibility(noL) : 1.0;
     vec3 radiance = materialRadiance(albedo, normal, vWorldPosition, shade, visibility,
                                     uSurfaceRoughness * properties.x, uSurfaceMetallic * properties.y,
-                                    uSurfaceReflectivity * properties.z, occlusion);
-    vec3 surface = displayColor(radiance * (1.0 + heatBoost));
+                                    uSurfaceReflectivity * properties.z, occlusion, uSurfaceReflectance);
+    vec3 emission = uEmissiveFactor;
+    if (uHasEmissiveTexture) {
+        emission *= linearColor(sampleSurface(uEmissiveTexture, tc).rgb);
+    }
+    vec3 surface = displayColor(radiance * (1.0 + heatBoost) + emission);
     FragColor = vec4(distanceFog(mix(surface, uHazeColor, clamp(uHaze, 0.0, 1.0))), uAlpha);
 }

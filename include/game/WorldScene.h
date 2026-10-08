@@ -56,7 +56,15 @@ class WorldScene {
     float previousLeafTime_ = -1;
     float previousLeafScroll_ = 0;
     float previousLeafPlayerX_ = 0;
-    void addDecor(float scroll);
+    void addDecor();
+    void addStreetLamps(float scroll);
+    std::vector<engine::math::Vec3> lampPosts_;
+    struct SidewalkAccess {
+        float side, z;
+        unsigned int seed;
+        bool park;
+    };
+    std::vector<SidewalkAccess> sidewalkAccess_;
     void addEntities(std::span<const Entity> entities);
     void addEffect(const CollectEffect& effect, float effectRemainder);
     void addCube(const Transform& transform, Color color, bool followsGround = false);

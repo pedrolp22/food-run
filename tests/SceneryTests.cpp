@@ -7,6 +7,7 @@
 #include <array>
 #include <cmath>
 #include <glad/glad.h>
+#include <map>
 #include <set>
 #include <type_traits>
 #include <vector>
@@ -69,10 +70,11 @@ void parkLayoutChecks(const game::GameAssets& assets, game::WorldScene& world) {
                     CHECK(quad->materialTextures.properties ==
                           assets.materialTextures(game::TextureId::Grass).properties);
                     CHECK(quad->materialTextures.normal == assets.materialTextures(game::TextureId::Grass).normal);
-                    CHECK(quad->worldSize.x > 0 && quad->worldSize.x <= GameConfig::kGrassTileSize + .00001f);
+                    CHECK(quad->worldSize.x > 0 &&
+                          quad->worldSize.x <= GameConfig::kParkMaxWidthTiles * GameConfig::kGrassTileSize + .00001f);
                     CHECK(near(quad->textureScale.x, quad->worldSize.x / GameConfig::kGrassTileSize));
                     CHECK(near(quad->textureScale.y, 1)); // Trimmed tiles retain the same texel density.
-                    trimmedTile |= quad->textureScale.x < .99f;
+                    trimmedTile |= !near(quad->textureScale.x, std::round(quad->textureScale.x), .0001f);
                     const float x = quad->model.values[12] - track.offset(quad->model.values[14]);
                     const auto localBounds = bounds(*quad, &track);
                     CHECK(localBounds.x0 > sidewalkEdge || localBounds.x1 < -sidewalkEdge);
@@ -121,8 +123,7 @@ void parkLayoutChecks(const game::GameAssets& assets, game::WorldScene& world) {
         const int lastLot = static_cast<int>(std::ceil((scroll + 100) / game::scenery::buildingSpacing));
         for (float side : {-1.f, 1.f}) {
             for (int lot = firstLot; lot < lastLot; ++lot) {
-                if (!game::scenery::hasPocketPark(game::scenery::streetLotSeed(lot, side)) ||
-                    !game::scenery::hasPocketPark(game::scenery::streetLotSeed(lot + 1, side))) {
+                if (!game::scenery::hasPocketPark(lot, side) || !game::scenery::hasPocketPark(lot + 1, side)) {
                     continue;
                 }
                 ++joinedParks;
@@ -255,6 +256,132 @@ void parkLayoutChecks(const game::GameAssets& assets, game::WorldScene& world) {
     CHECK(left && right && leftGarden && rightGarden && trimmedTile && treeHeights.size() > 5 && joinedParks > 0);
 }
 
+void streetCoherenceChecks(const game::GameAssets& assets, game::WorldScene& world) {
+    const TrackCurve track({GameConfig::kWorldCurvature, GameConfig::kRoadSway, -5, 24, GameConfig::kLaneStartZ});
+    const auto& benchModel = assets.model(game::ModelId::Bench);
+    const auto benchData = engine::assets::loadGltf(std::filesystem::path(TEST_ASSET_DIR) / "models/bench/scene.gltf",
+                                                    benchModel.boundsHalfExtent().y * 2);
+    int sharedFrontages = 0, benches = 0, bins = 0;
+    for (float scroll : {0.f, 5.f, 37.f, 99.f, 1217.f}) {
+        const Scene scene = world.build(0, scroll, 24, {}, {});
+        std::vector<const Quad*> doors;
+        std::vector<ModelInstance> props;
+        std::map<std::pair<int, int>, std::vector<const Quad*>> blocks;
+        for (const auto& object : scene.objects) {
+            if (const auto* door = std::get_if<Quad>(&object);
+                door && door->texture == &assets.texture(game::TextureId::BrickDoor)) {
+                doors.push_back(door);
+                const int lot =
+                    static_cast<int>(std::round((scroll - door->model.values[14]) / game::scenery::buildingSpacing));
+                const int block = static_cast<int>(std::floor(float(lot) / GameConfig::kStreetBlockLots));
+                blocks[{block, door->normal.x > 0 ? -1 : 1}].push_back(door);
+            }
+            if (const auto* prop = std::get_if<ModelInstance>(&object);
+                prop && (prop->model == &benchModel || prop->model == &assets.model(game::ModelId::TrashCan))) {
+                props.push_back(*prop);
+            }
+        }
+        for (const auto& [key, row] : blocks) {
+            if (row.size() < 2) {
+                continue;
+            }
+            ++sharedFrontages;
+            const auto* first = row.front();
+            const float height = first->worldSize.y / first->facadeVerticalRange.y;
+            const float setback = key.second * (first->model.values[12] - track.offset(first->model.values[14]));
+            for (const auto* door : row) {
+                CHECK(near(door->worldSize.y / door->facadeVerticalRange.y, height));
+                const float next = key.second * (door->model.values[12] - track.offset(door->model.values[14]));
+                CHECK(std::abs(next - setback) <=
+                      (GameConfig::kStreetExtraSetbackMax - GameConfig::kStreetExtraSetbackMin) * .18f + .001f);
+            } // Neighboring residential lots share floor counts and a frontage line, including before lot zero.
+        }
+        std::vector<Vec2> parkGates;
+        for (const auto& object : scene.objects) {
+            const auto* lawn = std::get_if<Quad>(&object);
+            if (!lawn || lawn->texture != &assets.texture(game::TextureId::Grass) ||
+                lawn->worldSize.x < GameConfig::kParkMinWidthTiles * GameConfig::kGrassTileSize - .001f) {
+                continue;
+            }
+            const float z = lawn->model.values[14];
+            const float x = lawn->model.values[12] - track.offset(z);
+            const float side = x < 0 ? -1.f : 1.f;
+            const float edge = x - side * lawn->worldSize.x * .5f;
+            const bool fenced = std::any_of(scene.objects.begin(), scene.objects.end(), [&](const auto& item) {
+                const auto* fence = std::get_if<Quad>(&item);
+                return fence && fence->texture == &assets.texture(game::TextureId::Fence) &&
+                       std::abs(fence->normal.x) > .99f && near(fence->model.values[14], z, .002f) &&
+                       near(fence->model.values[12] - track.offset(z), edge, .01f);
+            });
+            if (!fenced) {
+                parkGates.push_back({side, z});
+            }
+        }
+        CHECK(!parkGates.empty());
+        for (const auto& object : scene.objects) {
+            if (const auto* lamp = std::get_if<ModelInstance>(&object);
+                lamp && lamp->model == &assets.model(game::ModelId::StreetLamp)) {
+                const auto& m = lamp->transform.values;
+                const float side = m[12] - track.offset(m[14]) < 0 ? -1.f : 1.f;
+                for (const auto& gate : parkGates) {
+                    CHECK(side != gate.x || std::abs(m[14] - gate.y) >= GameConfig::kGrassTileSize * .5f + .2f);
+                }
+            }
+        }
+        for (const auto& prop : props) {
+            const auto& m = prop.transform.values;
+            const float side = m[12] - track.offset(m[14]) < 0 ? -1.f : 1.f;
+            const auto extent = prop.model->boundsHalfExtent();
+            const float halfZ = std::abs(m[2]) * extent.x + std::abs(m[6]) * extent.y + std::abs(m[10]) * extent.z;
+            for (const auto& gate : parkGates) {
+                CHECK(side != gate.x || std::abs(m[14] - gate.y) >= GameConfig::kGrassTileSize * .5f + halfZ);
+            }
+            for (const auto* door : doors) {
+                if (-door->normal.x == side) {
+                    CHECK(std::abs(m[14] - door->model.values[14]) >= GameConfig::kGardenDoorPathWidth * .5f + halfZ);
+                }
+            }
+            if (prop.model != &benchModel) {
+                ++bins;
+                continue;
+            }
+            ++benches;
+            const Vec3 axis = normalize({m[8], m[9], m[10]});
+            const float half = GameConfig::kStreetBenchLength * .5f;
+            const Vec3 tangent =
+                normalize({track.offset(m[14] + half) - track.offset(m[14] - half),
+                           track.drop(m[14] - half) - track.drop(m[14] + half), GameConfig::kStreetBenchLength});
+            CHECK(std::abs(dot(axis, tangent)) > .9999f);
+            CHECK(near(std::sqrt(m[8] * m[8] + m[9] * m[9] + m[10] * m[10]) * extent.z * 2,
+                       GameConfig::kStreetBenchLength));
+            CHECK(near(m[0] * m[0] + m[1] * m[1] + m[2] * m[2], 1)); // Seat depth is unchanged.
+            CHECK(near(m[4] * m[4] + m[5] * m[5] + m[6] * m[6], 1)); // Height is unchanged.
+            for (const auto& primitive : benchData.primitives) {
+                const auto& vertices = primitive.vertices;
+                for (std::size_t i = 0; i < vertices.size(); i += engine::assets::kModelVertexStride) {
+                    const auto p = transformPoint(prop.transform, {vertices[i], vertices[i + 1], vertices[i + 2]});
+                    const float localX = side * (p.x - track.offset(p.z));
+                    CHECK(localX > game::scenery::roadHalfEdge + .1f);
+                    CHECK(localX < game::scenery::sidewalkHalfWidth);
+                }
+            } // The actual imported mesh stays on the sidewalk instead of extending across the street.
+        }
+        const auto& moved = world.build(0, scroll + .05f, 24, {}, {});
+        for (const auto& prop : props) {
+            const auto& a = prop.transform.values;
+            if (a[14] < -84 || a[14] > 10) {
+                continue;
+            }
+            CHECK(std::any_of(moved.objects.begin(), moved.objects.end(), [&](const auto& object) {
+                const auto* other = std::get_if<ModelInstance>(&object);
+                return other && other->model == prop.model && near(other->transform.values[14], a[14] + .05f, .0002f) &&
+                       near(other->transform.values[12] - track.offset(other->transform.values[14]),
+                            a[12] - track.offset(a[14]), .0002f);
+            }));
+        }
+    }
+    CHECK(sharedFrontages > 0 && benches > 0 && bins > 0);
+}
 void leafMotionChecks(const game::GameAssets& assets) {
     const TrackCurve track({GameConfig::kWorldCurvature, GameConfig::kRoadSway, -5, 24, GameConfig::kLaneStartZ});
     game::WorldScene moving(assets), centerLane(assets), fastPass(assets);
@@ -724,6 +851,7 @@ void particleRenderingChecks(Size size) {
 } // namespace
 void sceneryChecks(const game::GameAssets& assets, game::WorldScene& world, Size size) {
     parkLayoutChecks(assets, world);
+    streetCoherenceChecks(assets, world);
     leafMotionChecks(assets);
     sceneryMaterialChecks(assets, size);
     cutoutChecks(size);

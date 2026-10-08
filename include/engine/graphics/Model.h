@@ -22,6 +22,8 @@ class Model {
         bool packedReflectivity = false;
         float alphaCutoff = 0;
         bool doubleSided = false;
+        std::array<float, 3> emissiveFactor = {0, 0, 0}; // Includes the imported emissive-strength multiplier.
+        Texture emissive;
         MaterialTextures textures() const {
             return {.properties = properties.id() ? &properties : nullptr,
                     .normal = normal.id() ? &normal : nullptr,

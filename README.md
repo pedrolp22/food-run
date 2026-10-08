@@ -46,6 +46,11 @@ Road and sidewalk bump maps add tar pits, raised aggregate and recessed slab joi
 trilinear filtering so texture detail follows the curved surface continuously.
 PSX material detail uses nearest mip texels with gradual transitions to keep distant glints stable. Props retain their
 authored glTF finishes and normal maps, including the bench's wood and metal supports.
+Street lamps stand at the curb on both sides, staggered along the road with their arms facing inward.
+Their default height is 4.8 units, with 32-unit spacing, seeded jitter and occasional gaps; posts leave entrances clear.
+Their authored bulb texture glows as dusk turns to night, casting soft yellow light on nearby streets, props and
+building surfaces, including live reflections. The `kStreetLamp*` settings in `GameConfig.h` control placement,
+height, color, intensity, falloff and the continuous switch-on phase. Lamps do not add shadow-rendering passes.
 Skyscraper glass and masonry use generated material maps: each pane has a local finish, while recessed edges and rough
 frames respond separately to lighting. An explicit glass mask identifies panes independently of their displayed color.
 Brick buildings use the new tiled window and plain-wall textures, with a single bottom-center door on accessible
@@ -56,6 +61,9 @@ Brick buildings use regular lots, consistent footprints, aligned entrances and t
 The default footprint is two window tiles across and six along the street. Random frontage gaps, brick/tower mixes and
 forecourts break up the street, with only some buildings close to the sidewalk. Footprint/floor controls and the
 `kStreet*` occupancy, mix and setback settings in `GameConfig.h` tune this layout; choices stay stable while scrolling.
+Groups of four neighboring lots share floor heights and frontage alignment, with different occupancy and building mixes
+between blocks. Benches and bins sit beside park gates or building entrances, leaving their paths clear. Benches follow
+the sidewalk's direction and slope; `kStreetBenchLength` sets their 2.2-unit length without changing seat depth or height.
 Empty frontage lots can contain pocket parks built from tiled `grass.png`, thin `spikedfence_decor.png` fences and the
 tree model. Parks reserve two building columns, with wider lawns and taller trees. Consecutive green lots join into
 continuous parks with fences only on exposed edges, shared grass tiling and tint, and multiple sidewalk entrances.
@@ -97,9 +105,12 @@ Faces outside the priority budget also gain detail gradually from 90 to 35 units
 share their distance and activation fade (`planarReflectionBlendSeconds`, .25), so narrow sides appear with end faces.
 Nearby views (within 35 units) and high-detail captures update every frame. Other building views remain visible between
 staggered refreshes (`distantPlanarReflectionUpdateSeconds`, .2), with mapping adjusted for scrolling scenery.
+`maxDistantPlanarUpdatesPerFrame` (4; 0 is unlimited) spreads scheduled distant work across frames, keeping related faces
+together. Newly visible faces and camera changes capture immediately.
 Buffers retain their allocations as crops shrink, PSX captures match its raster density, and authored skies skip the
 duplicate geometry depth pass. Hidden buildings and out-of-view props are culled, and shared lighting uniforms are
-uploaded once per view. `worldReflectionMapSize` sets cubemap face resolution for procedural
+uploaded once per view. Main and shadow views also cull outside their own frustums. Contiguous grass rows and straight
+fence runs share surfaces; material uniforms and bindings are cached within each frame. `worldReflectionMapSize` sets cubemap face resolution for procedural
 skies (128; 0 disables world reflections), and
 `WindowMaterial::worldReflections` enables captures per facade. The distant probe follows the camera unless
 `Scene::reflectionProbePosition` overrides its position when the cubemap fallback is used.

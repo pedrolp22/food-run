@@ -57,6 +57,9 @@ WorldScene::WorldScene(const GameAssets& assets)
     scene_.effects.reserve(144);
     scene_.particles.reserve(kMaxVisibleLeaves);
     trees_.reserve(24);
+    lampPosts_.reserve(kMaxPointLights);
+    sidewalkAccess_.reserve(32);
+    scene_.pointLights.reserve(kMaxPointLights);
 }
 const Scene& WorldScene::build(float playerX, float roadScroll, float gameTime, std::span<const Entity> entities,
                                std::span<const CollectEffect> effects, float effectRemainder, float nightBlend) {
@@ -84,6 +87,9 @@ const Scene& WorldScene::build(float playerX, float roadScroll, float gameTime, 
     scene_.effects.clear();
     scene_.particles.clear();
     trees_.clear();
+    lampPosts_.clear();
+    sidewalkAccess_.clear();
+    scene_.pointLights.clear();
     addGround(roadScroll);
     addBuildings(roadScroll);
     addSidewalk(roadScroll);
@@ -92,7 +98,8 @@ const Scene& WorldScene::build(float playerX, float roadScroll, float gameTime, 
     addCube(
         {playerX + track_.offset(kPlayerZ), kPlayerScale * 0.5f, kPlayerZ, kPlayerScale, kPlayerScale, kPlayerScale},
         {0.12f, 0.55f, 1.0f});
-    addDecor(roadScroll);
+    addStreetLamps(roadScroll);
+    addDecor();
     addEntities(entities);
     for (const auto& effect : effects) {
         addEffect(effect, effectRemainder);
@@ -101,17 +108,35 @@ const Scene& WorldScene::build(float playerX, float roadScroll, float gameTime, 
 }
 
 void WorldScene::addGround(float roadScroll) {
-    constexpr Color groundColor = {0.36f, 0.35f, 0.33f};
+    static_assert(kConcreteTileSize > 0);
     constexpr float groundDepth = 11;
     const float start = kLaneStartZ + std::fmod(roadScroll, kLaneSegmentLength);
+    const auto& concrete = assets_.texture(TextureId::ConcreteTiles);
+    const auto concreteMaps = assets_.materialTextures(TextureId::ConcreteTiles);
+    const float tileLength = kConcreteTileSize / concrete.aspect();
+    // A shared, wrapped world phase keeps neighboring strips and recycled
+    // segments continuous without growing UV coordinates during long runs.
+    const float textureScroll = std::fmod(roadScroll, tileLength);
+    const Mat4 groundScale = multiply(rotateX(kPi * 0.5f), scale({groundDepth, subLength, 1}));
     for (float sign : {-1.0f, 1.0f}) {
         const float x = sign * (sidewalkHalfWidth + groundDepth * 0.5f);
         for (int segment = 0; segment < kLaneSegmentCount; ++segment) {
             for (int sub = 0; sub < kRoadSubdivisions; ++sub) {
                 const float z = start + segment * kLaneSegmentLength + (sub + 0.5f) * subLength;
-                addColoredQuad(groundColor,
-                               {x + track_.offset(z), -0.06f - track_.drop(z), z, groundDepth, subLength, 1}, Face::Top,
-                               {0, 1, 0}, 1, true, true);
+                Quad command;
+                command.model = multiply(translation({x + track_.offset(z), -0.06f - track_.drop(z), z}), groundScale);
+                track_.bendSegment(command.model, z, subLength, 1);
+                command.normal = track_.normal(z, subLength);
+                command.texture = &concrete;
+                command.pbrSurface = true;
+                command.surfaceMaterial = {1, 0, 1};
+                command.materialTextures = concreteMaps;
+                command.worldSize = {groundDepth, subLength};
+                command.textureScale = {groundDepth / kConcreteTileSize, subLength / tileLength};
+                command.textureOffset = {(x - groundDepth * .5f) / kConcreteTileSize,
+                                         (z - subLength * .5f - textureScroll) / tileLength};
+                command.psxMinificationLodBias = kPsxSidewalkLodBias;
+                scene_.objects.emplace_back(command);
             }
         }
     }
@@ -183,34 +208,43 @@ void WorldScene::addBuildings(float roadScroll) {
 
             for (int i = firstI; i <= lastI; ++i) {
                 const unsigned int lotSeed = streetLotSeed(i, side);
-                const bool streetBuilding = hashFloat(lotSeed, 10) < kStreetBuildingChance;
-                if ((b == 0 && !streetBuilding) || (b < kParkBuildingCells && hasPocketPark(lotSeed))) {
+                const bool streetBuilding = hasStreetBuilding(i, side);
+                if ((b == 0 && !streetBuilding) || (b < kParkBuildingCells && hasPocketPark(i, side))) {
                     continue;
                 }
-                const bool nearSidewalk = hashFloat(lotSeed, 11) < kStreetNearSidewalkChance;
+                const bool nearSidewalk = streetNearSidewalk(i, side);
                 // Recess the whole lot, including its background columns, to keep every footprint clear.
-                const float extraSetback =
-                    streetBuilding && !nearSidewalk
-                        ? std::lerp(kStreetExtraSetbackMin, kStreetExtraSetbackMax, hashFloat(lotSeed, 12))
-                        : 0;
+                const float extraSetback = streetBuilding && !nearSidewalk
+                                               ? std::lerp(kStreetExtraSetbackMin, kStreetExtraSetbackMax,
+                                                           std::clamp(hashFloat(streetBlockSeed(i, side), 12) +
+                                                                          (hashFloat(lotSeed, 12) - .5f) * .18f,
+                                                                      0.0f, 1.0f))
+                                               : 0;
                 const unsigned int seed =
                     static_cast<unsigned int>(i) * 97u + sideIndex * 131u + static_cast<unsigned int>(b) * 353u;
 
                 const float baseWidth = 1.6f + hashFloat(seed, 0) * 0.7f;
                 const float roll = hashFloat(seed, 1);
-                const bool brick = roll < (b == 0 ? kStreetBrickChance : .55f);
+                const bool brick = streetBrick(i, side, b);
                 float h;
                 float wFactor;
                 if (brick) {
                     const int floorIndex =
-                        (i % floorVariants + floorVariants + static_cast<int>(sideIndex) + b) % floorVariants;
+                        std::min(floorVariants - 1,
+                                 static_cast<int>(hashFloat(streetBlockSeed(i, side), 30 + b) * floorVariants));
                     h = (kBrickBuildingMinFloors + floorIndex) * brickFloorHeight + kBrickBuildingRoofBandHeight;
                     wFactor = 1;
                 } else if (roll < 0.85f) {
-                    h = 11.0f + hashFloat(seed, 5) * 4.0f;
+                    h = 11.0f +
+                        std::clamp(hashFloat(streetBlockSeed(i, side), 35 + b) + (hashFloat(seed, 5) - .5f) * .2f, 0.0f,
+                                   1.0f) *
+                            4.0f;
                     wFactor = 1.45f;
                 } else {
-                    h = 17.0f + hashFloat(seed, 5) * 8.0f;
+                    h = 17.0f +
+                        std::clamp(hashFloat(streetBlockSeed(i, side), 35 + b) + (hashFloat(seed, 5) - .5f) * .2f, 0.0f,
+                                   1.0f) *
+                            8.0f;
                     wFactor = 1.75f;
                 }
                 const float w = brick ? brickWidth : baseWidth * wFactor;
@@ -340,6 +374,9 @@ void WorldScene::addBrickFacade(const Transform& transform, Face face, Vec3 norm
     const float firstWindowY = door ? tileHeight : 0;
     patch(TextureId::BrickWindow, -panelWidth * .5f, firstWindowY, panelWidth, rows * tileHeight - firstWindowY);
     if (door) {
+        sidewalkAccess_.push_back(
+            {-normal.x, transform.z,
+             hashSeed(static_cast<unsigned int>(reflectionId >> 32) ^ static_cast<unsigned int>(reflectionId)), false});
         // Only an accessible street-facing facade gets an entrance, never a repeating door row.
         patch(TextureId::BrickDoor, -tileWidth * .5f, 0, tileWidth, tileHeight);
         const float flankWidth = (transform.scaleX - tileWidth) * .5f;
@@ -407,37 +444,125 @@ void WorldScene::addSidewalk(float roadScroll) {
     }
 }
 
-void WorldScene::addDecor(float roadScroll) {
-    const float decorCenterX = (roadHalfEdge + sidewalkHalfWidth) * 0.5f;
-    const float sidewalkHalfWidthActual = sidewalkHalfWidth - roadHalfEdge;
-    const float benchOffset = sidewalkHalfWidthActual * 0.28f;
-    const float trashOffset = sidewalkHalfWidthActual * 0.02f;
-
-    constexpr float kDecorSpacing = 8.0f;
-    constexpr float kDecorNearZ = -86.0f;
-    constexpr float kDecorFarZ = 12.0f;
-    const int decorFirstI = static_cast<int>(std::floor((roadScroll - kDecorFarZ) / kDecorSpacing));
-    const int decorLastI = static_cast<int>(std::ceil((roadScroll - kDecorNearZ) / kDecorSpacing));
-
-    for (int i = decorFirstI; i <= decorLastI; ++i) {
-        const unsigned int seed = static_cast<unsigned int>(i) * 61u;
-        if (hashFloat(seed, 0) > 0.6f) {
-            continue;
+void WorldScene::addStreetLamps(float roadScroll) {
+    static_assert(kStreetLampHeight > 0 && kStreetLampSpacing >= 20 && kStreetLampCurbInset > 0);
+    static_assert(kStreetLampSpawnChance > 0 && kStreetLampSpawnChance <= 1);
+    static_assert(kStreetLampOnStart >= 0 && kStreetLampOnEnd > kStreetLampOnStart && kStreetLampOnEnd <= 1);
+    // Anchors in the grounded, height-one glTF model. Its centered bounds include the projecting arm.
+    constexpr Vec3 poleAnchor{-.08941f, 0, 0};
+    constexpr Vec3 bulbAnchor{.09235f, .95959f, -.00142f};
+    constexpr float nearZ = -108, farZ = 24;
+    const float t =
+        std::clamp((scene_.sky.nightBlend - kStreetLampOnStart) / (kStreetLampOnEnd - kStreetLampOnStart), 0.0f, 1.0f);
+    const float brightness = t * t * (3 - 2 * t);
+    for (float side : {-1.f, 1.f}) {
+        const float stagger = side > 0 ? kStreetLampSpacing * .5f : 0;
+        const int first = static_cast<int>(std::floor((roadScroll - farZ - stagger) / kStreetLampSpacing));
+        const int last = static_cast<int>(std::ceil((roadScroll - nearZ - stagger) / kStreetLampSpacing));
+        for (int index = first; index <= last; ++index) {
+            const unsigned int seed = static_cast<unsigned int>(index) * 113u + (side > 0 ? 739u : 397u);
+            if (hashFloat(seed, 3) >= kStreetLampSpawnChance) {
+                continue;
+            }
+            float baseZ = -index * kStreetLampSpacing - stagger + (hashFloat(seed, 0) - .5f) * 6;
+            const int lot = static_cast<int>(std::round(-baseZ / buildingSpacing));
+            if (hasStreetBuilding(lot, side) && std::abs(baseZ + lot * buildingSpacing) < 1.8f) {
+                baseZ = -lot * buildingSpacing + (hashFloat(seed, 4) < .5f ? -1.8f : 1.8f);
+            } // Keep posts beside access paths, using world-space lots so scrolling never moves the choice.
+            for (const auto& access : sidewalkAccess_) {
+                if (access.park && access.side == side && std::abs(roadScroll + baseZ - access.z) < 1.2f) {
+                    baseZ = access.z - roadScroll + (hashFloat(seed, 5) < .5f ? -1.2f : 1.2f);
+                }
+            }
+            const float z = roadScroll + baseZ;
+            if (z < nearZ || z > farZ) {
+                continue;
+            }
+            const float height = kStreetLampHeight * (.96f + .08f * hashFloat(seed, 1));
+            const Vec3 base{track_.offset(z) + side * (roadHalfEdge + kStreetLampCurbInset),
+                            sidewalkTopY - track_.drop(z), z};
+            const Mat4 pose = multiply(side > 0 ? rotateY(kPi) : identity(), scale({height, height, height}));
+            const auto pole = transformPoint(pose, poleAnchor);
+            ModelInstance lamp;
+            lamp.transform = multiply(translation({base.x - pole.x, base.y - pole.y, base.z - pole.z}), pose);
+            lamp.model = &assets_.model(ModelId::StreetLamp);
+            lamp.pbrSurface = true;
+            lamp.emissiveScale = brightness;
+            scene_.objects.emplace_back(lamp);
+            lampPosts_.push_back(base);
+            if (brightness > 0) {
+                scene_.pointLights.push_back(
+                    {transformPoint(lamp.transform, bulbAnchor),
+                     {kStreetLampLightColor[0], kStreetLampLightColor[1], kStreetLampLightColor[2]},
+                     kStreetLampLightIntensity * brightness,
+                     kStreetLampLightRadius});
+            }
         }
+    }
+}
 
-        const float zJitter = (hashFloat(seed, 1) - 0.5f) * 2.0f;
-        const float propZ = roadScroll - static_cast<float>(i) * kDecorSpacing + zJitter;
-        const float sideSign = hashFloat(seed, 2) < 0.5f ? -1.0f : 1.0f;
-        const bool isBench = hashFloat(seed, 4) < 0.45f;
-        const float xJitter = (hashFloat(seed, 3) - 0.5f) * 0.2f;
-        const float offset = isBench ? benchOffset : trashOffset;
-        const float propX = sideSign * (decorCenterX + offset + xJitter) + track_.offset(propZ);
-        const float propY = sidewalkTopY - track_.drop(propZ);
-
-        if (isBench) {
-            addModel(assets_.model(ModelId::Bench), {propX, propY, propZ, 1.0f, 1.0f, 1.0f});
-        } else {
-            addModel(assets_.model(ModelId::TrashCan), {propX, propY, propZ, 1.6f, 1.6f, 1.6f});
+void WorldScene::addDecor() {
+    static_assert(kStreetBenchLength > 0);
+    const auto place = [&](ModelId id, float side, float z) {
+        if (z < -86 || z > 12) {
+            return;
+        }
+        const auto& asset = assets_.model(id);
+        const bool bench = id == ModelId::Bench;
+        const float size = bench ? 1.0f : 1.6f;
+        const float halfDepth = bench ? kStreetBenchLength * .5f : asset.boundsHalfExtent().z * size;
+        if (std::any_of(sidewalkAccess_.begin(), sidewalkAccess_.end(), [&](const auto& access) {
+                return side == access.side &&
+                       std::abs(z - access.z) <
+                           (access.park ? kGrassTileSize * .5f : kGardenDoorPathWidth * .5f) + halfDepth + .15f;
+            })) {
+            return;
+        }
+        const Vec3 p{side * (roadHalfEdge + .6f) + track_.offset(z), sidewalkTopY - track_.drop(z), z};
+        if (std::any_of(lampPosts_.begin(), lampPosts_.end(), [&](Vec3 post) {
+                const float dx = post.x - p.x, dz = post.z - p.z;
+                return dx * dx + dz * dz < (halfDepth + .5f) * (halfDepth + .5f);
+            })) {
+            return;
+        }
+        ModelInstance prop;
+        Mat4 pose = scale({size, size, size});
+        if (bench) {
+            // The imported seat runs along local Z. Follow the sidewalk's tangent
+            // and shorten that axis without stretching its height or seat depth.
+            const Vec3 forward =
+                normalize({track_.offset(z + halfDepth) - track_.offset(z - halfDepth),
+                           track_.drop(z - halfDepth) - track_.drop(z + halfDepth), kStreetBenchLength});
+            const Vec3 right = normalize(cross({0, 1, 0}, forward));
+            const Vec3 up = cross(forward, right);
+            const float facing = side > 0 ? -1.f : 1.f;
+            const float lengthScale = kStreetBenchLength / (asset.boundsHalfExtent().z * 2);
+            pose.values[0] = right.x * facing;
+            pose.values[1] = right.y * facing;
+            pose.values[2] = right.z * facing;
+            pose.values[4] = up.x;
+            pose.values[5] = up.y;
+            pose.values[6] = up.z;
+            pose.values[8] = forward.x * lengthScale * facing;
+            pose.values[9] = forward.y * lengthScale * facing;
+            pose.values[10] = forward.z * lengthScale * facing;
+        }
+        prop.transform = multiply(translation(p), pose);
+        prop.model = &asset;
+        prop.pbrSurface = true;
+        scene_.objects.emplace_back(prop);
+    };
+    for (const auto& access : sidewalkAccess_) {
+        const float sign = hashFloat(access.seed, 51) < .5f ? -1.f : 1.f;
+        if (access.park && hashFloat(access.seed, 50) < .65f) {
+            // Seating belongs beside a park gate and faces the street; bins sit farther along the path.
+            const float distance = kGrassTileSize * .5f + kStreetBenchLength * .5f + .45f;
+            place(ModelId::Bench, access.side, access.z + sign * distance);
+            if (hashFloat(access.seed, 52) < .5f) {
+                place(ModelId::TrashCan, access.side, access.z + sign * (distance + 1.8f));
+            }
+        } else if (!access.park && hashFloat(access.seed, 53) < .4f) {
+            place(ModelId::TrashCan, access.side, access.z + sign * brickDepth * .33f);
         }
     }
 }

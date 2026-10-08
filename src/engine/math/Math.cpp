@@ -40,13 +40,14 @@ Mat4 identity() {
 
 Mat4 multiply(const Mat4& left, const Mat4& right) {
     Mat4 result;
+    const auto* a = left.values.data();
+    const auto* b = right.values.data();
+    auto* out = result.values.data();
     for (int column = 0; column < 4; ++column) {
+        const int offset = column * 4;
+        const float x = b[offset], y = b[offset + 1], z = b[offset + 2], w = b[offset + 3];
         for (int row = 0; row < 4; ++row) {
-            float value = 0.0f;
-            for (int index = 0; index < 4; ++index) {
-                value += left.values[index * 4 + row] * right.values[column * 4 + index];
-            }
-            result.values[column * 4 + row] = value;
+            out[offset + row] = a[row] * x + a[row + 4] * y + a[row + 8] * z + a[row + 12] * w;
         }
     }
     return result;

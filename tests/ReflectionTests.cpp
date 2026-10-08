@@ -27,7 +27,7 @@ void stateChecks() {
     CHECK(value == 0);
     glGetIntegerv(GL_ACTIVE_TEXTURE, &value);
     CHECK(value == GL_TEXTURE0);
-    for (int unit = 0; unit <= 12; ++unit) {
+    for (int unit = 0; unit <= 13; ++unit) {
         glGetIntegeri_v(GL_SAMPLER_BINDING, unit, &value);
         CHECK(value == 0);
     }
@@ -462,6 +462,126 @@ void coverageChecks(Size size) {
     settings.planarReflectionBlendSeconds = -1;
     checkThrows([&] { SceneRenderer invalid(settings); });
 }
+void distantRefreshChecks(Size size) {
+    RenderSettings settings;
+    settings.retroSize = size;
+    settings.retroPixelStep = settings.retroAffineStrength = settings.retroDitherStrength = 0;
+    settings.shadowMapSize = settings.worldReflectionMapSize = 32;
+    settings.planarReflectionSize = 128;
+    settings.distantPlanarReflectionSize = 64;
+    settings.maxPlanarReflections = settings.maxDistantPlanarUpdatesPerFrame = 1;
+    settings.planarReflectionBlendSeconds = 0;
+    constexpr float zero[] = {0}, one[] = {1};
+    Texture backing = Texture::fromRedChannel({1, 1}, zero);
+    Texture glass = Texture::fromRedChannel({1, 1}, one);
+    Scene scene;
+    scene.camera.position = {0, 0, 8};
+    scene.camera.target = {0, 0, -50};
+    scene.sky.top = scene.sky.bottom = {0, 0, 0};
+    scene.sky.cloudCoverage = scene.sky.sunSize = 0;
+    scene.sky.texturedClouds[0].texture = &backing;
+    scene.sky.texturedClouds[0].opacity = 0;
+    scene.light.ambient = 1;
+    std::array<Vec3, 3> centers{};
+    for (int index = 0; index < 3; ++index) {
+        centers[index] = {float(index - 1) * 16, 0, -48.f - index * 4};
+        Quad window;
+        window.model = multiply(translation(centers[index]), scale({10, 12, 1}));
+        window.worldSize = {10, 12};
+        window.normal = {0, 0, 1};
+        window.texture = &backing;
+        window.materialTextures.glass = &glass;
+        window.skyscraperWindows = true;
+        window.windowMaterial.roughness = 0;
+        window.windowMaterial.reflectance = .8f;
+        window.castsShadow = window.receivesShadow = false;
+        window.reflectionGroupId = index + 1;
+        window.reflectionId = index + 101;
+        scene.objects.emplace_back(window);
+    }
+    Quad backdrop;
+    backdrop.model = multiply(translation({0, 0, 12}), scale({300, 200, 1}));
+    backdrop.normal = {0, 0, -1};
+    backdrop.castsShadow = backdrop.receivesShadow = false;
+    scene.objects.emplace_back(backdrop);
+    const auto colors = [&](const auto& pixels) {
+        std::array<std::array<int, 3>, 3> samples{};
+        const auto projection = scene.camera.viewProjection(float(size.width) / size.height);
+        const auto& m = projection.values;
+        for (std::size_t index = 0; index < centers.size(); ++index) {
+            const auto point = centers[index];
+            const auto clip = transformPoint(projection, point);
+            const float w = m[3] * point.x + m[7] * point.y + m[11] * point.z + m[15];
+            const int x = (clip.x / w * .5f + .5f) * size.width;
+            const int y = (clip.y / w * .5f + .5f) * size.height;
+            CHECK(x >= 0 && x < size.width && y >= 0 && y < size.height);
+            const auto offset = (y * size.width + x) * 3;
+            samples[index] = {pixels[offset], pixels[offset + 1], pixels[offset + 2]};
+        }
+        return samples;
+    };
+    for (auto mode : {RenderMode::Normal, RenderMode::Psx}) {
+        SceneRenderer renderer(settings);
+        renderer.setMode(mode);
+        const auto frame = [&] {
+            renderer.render(scene, size);
+            stateChecks();
+            return colors(capture(size));
+        };
+        scene.time = 1;
+        std::get<Quad>(scene.objects.back()).color = {1, 0, 0};
+        for (auto color : frame()) {
+            CHECK(color[0] > 150 && color[1] < 20); // Every new face captures immediately, beyond the refresh budget.
+        }
+        scene.time += 1;
+        std::get<Quad>(scene.objects.back()).color = {0, 1, 0};
+        const auto staggered = frame();
+        const auto green = [](auto color) { return color[1] > 150 && color[0] < 20; };
+        CHECK(std::count_if(staggered.begin(), staggered.end(), green) == 2);
+        CHECK(std::count_if(staggered.begin(), staggered.end(), [](auto color) { return color[0] > 150; }) == 1);
+        scene.time += 1.f / 60;
+        const auto completed = frame();
+        CHECK(std::all_of(completed.begin(), completed.end(), green)); // Deferred views stay visible and catch up.
+        scene.time += 1.f / 60;
+        scene.camera.position.x = 1;
+        std::get<Quad>(scene.objects.back()).color = {0, 0, 1};
+        for (auto color : frame()) {
+            CHECK(color[2] > 150 && color[1] < 20); // Camera changes refresh all mappings immediately.
+        }
+        scene.camera.position.x = 0;
+        for (int refreshPolicy : {0, 1, 2}) {
+            auto immediateSettings = settings;
+            if (refreshPolicy == 0) {
+                immediateSettings.distantPlanarReflectionUpdateSeconds = 0;
+            } else if (refreshPolicy == 1) {
+                immediateSettings.maxDistantPlanarUpdatesPerFrame = 0;
+            } else {
+                immediateSettings.nearPlanarReflectionDistance = 75; // All three panes now belong to the near region.
+            }
+            SceneRenderer immediate(immediateSettings);
+            immediate.setMode(mode);
+            scene.time = 3;
+            std::get<Quad>(scene.objects.back()).color = {1, 0, 0};
+            immediate.render(scene, size);
+            scene.time = 4;
+            std::get<Quad>(scene.objects.back()).color = {0, 1, 0};
+            immediate.render(scene, size);
+            stateChecks();
+            const auto updated = colors(capture(size));
+            CHECK(std::all_of(updated.begin(), updated.end(), green));
+        }
+    }
+    settings.maxDistantPlanarUpdatesPerFrame = -1;
+    checkThrows([&] { SceneRenderer invalid(settings); });
+    settings.maxDistantPlanarUpdatesPerFrame = 1;
+    settings.nearPlanarReflectionDistance = -1;
+    checkThrows([&] { settings.validate(); });
+    settings.nearPlanarReflectionDistance = settings.distantPlanarReflectionDetailDistance;
+    checkThrows([&] { settings.validate(); });
+    settings.nearPlanarReflectionDistance = 20;
+    settings.distantPlanarReflectionDetailDistance = 75;
+    settings.validate();
+}
 void buildingCoverageChecks(Size size) {
     RenderSettings settings;
     settings.retroSize = size;
@@ -601,6 +721,7 @@ int main() {
         planarChecks(window.drawableSize());
         distanceFadeChecks(window.drawableSize());
         coverageChecks(window.drawableSize());
+        distantRefreshChecks(window.drawableSize());
         buildingCoverageChecks(window.drawableSize());
         std::cout << "Reflection tests passed: moving geometry, planar projection, glass blur, state and lifetime\n";
         return 0;

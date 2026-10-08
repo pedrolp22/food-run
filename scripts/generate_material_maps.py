@@ -309,6 +309,7 @@ def main():
     if args.profile:
         parser.error("--profile requires --texture")
     for source, profile in [("textures/road.png", "road"), ("textures/sidewalk.png", "concrete"),
+                            ("textures/concretetiles.png", "concrete"),
                             ("wall_brick.png", "masonry"), ("textures/skyscraper/building_top.png", "roof")]:
         filename = Path(source).stem
         build(ROOT / source, (args.output_dir or ROOT / "materials") / (filename + "_surface.png"), profile,

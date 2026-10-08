@@ -47,7 +47,12 @@ RenderTarget::RenderTarget(Size size, Kind kind, int samples) : size_(size) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, shadow || reflection ? GL_LINEAR : GL_NEAREST);
     if (reflection) {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, maxMipLevel());
-        glGenerateMipmap(GL_TEXTURE_2D);
+        // Allocate the chain without filtering an empty image. The first capture
+        // fills level zero before generating its actual reflection mipmaps.
+        for (int level = 1; level <= maxMipLevel(); ++level) {
+            glTexImage2D(GL_TEXTURE_2D, level, colorFormat, std::max(1, size.width >> level),
+                         std::max(1, size.height >> level), 0, GL_RGB, GL_UNSIGNED_BYTE, nullptr);
+        }
     }
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, shadow ? GL_CLAMP_TO_BORDER : GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, shadow ? GL_CLAMP_TO_BORDER : GL_CLAMP_TO_EDGE);

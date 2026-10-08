@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ShaderSources.h"
+#include "engine/graphics/Scene.h"
 #include "engine/graphics/ShaderProgram.h"
 #include <array>
 #include <string>
@@ -8,9 +9,19 @@
 namespace engine::graphics::detail {
 inline const std::string litSource = std::string(shaders::fog_glsl) + std::string(shaders::lighting_glsl);
 inline const std::string litTextureSource = litSource + std::string(shaders::texture_filter_glsl);
-inline const std::string materialTextureSource =
-    litTextureSource + std::string(shaders::material_glsl) + std::string(shaders::material_textures_glsl);
+inline const std::string materialTextureSource = litTextureSource + "#define MATERIAL_MAX_POINT_LIGHTS " +
+                                                 std::to_string(kMaxPointLights) + "\n" +
+                                                 std::string(shaders::brdf_glsl) + std::string(shaders::material_glsl) +
+                                                 std::string(shaders::material_textures_glsl);
 inline const std::string skySource = std::string(shaders::sky_panorama_glsl) + std::string(shaders::sky_clouds_glsl);
+struct PointLightUniforms {
+    int count;
+    int positions;
+    int radiance;
+    explicit PointLightUniforms(const ShaderProgram& shader)
+        : count(shader.uniform("uPointLightCount")), positions(shader.uniform("uPointLightPositionRadius[0]")),
+          radiance(shader.uniform("uPointLightRadiance[0]")) {}
+};
 struct MaterialMapUniforms {
     int properties;
     int normal;
@@ -283,10 +294,12 @@ struct SkyscraperProgram {
     int sunDir;
     int cameraPosition;
     int skyColor;
+    int horizonRadiance;
     int sunColor;
     int surfaceRoughness;
     int surfaceMetallic;
     int surfaceReflectivity;
+    int surfaceReflectance;
     int windowRoughness;
     int windowReflectivity;
     int hasWindows;
@@ -312,6 +325,7 @@ struct SkyscraperProgram {
     int hazeColor;
     MaterialMapUniforms maps;
     CloudSkyUniforms clouds;
+    PointLightUniforms pointLights;
     SkyscraperProgram()
         : shader(shaders::skyscraper_vert, shaders::skyscraper_frag, "skyscraper", materialTextureSource + skySource,
                  shaders::vertex_snap_glsl),
@@ -330,9 +344,11 @@ struct SkyscraperProgram {
           ditheredShadows(shader.uniform("uDitheredShadows")),
           ditheredShadowDarkness(shader.uniform("uDitheredShadowDarkness")), faceNormal(shader.uniform("uFaceNormal")),
           sunDir(shader.uniform("uSunDir")), cameraPosition(shader.uniform("uCameraPosition")),
-          skyColor(shader.uniform("uSkyColor")), sunColor(shader.uniform("uSunColor")),
-          surfaceRoughness(shader.uniform("uSurfaceRoughness")), surfaceMetallic(shader.uniform("uSurfaceMetallic")),
+          skyColor(shader.uniform("uSkyRadiance")), horizonRadiance(shader.uniform("uHorizonRadiance")),
+          sunColor(shader.uniform("uSunRadiance")), surfaceRoughness(shader.uniform("uSurfaceRoughness")),
+          surfaceMetallic(shader.uniform("uSurfaceMetallic")),
           surfaceReflectivity(shader.uniform("uSurfaceReflectivity")),
+          surfaceReflectance(shader.uniform("uSurfaceReflectance")),
           windowRoughness(shader.uniform("uWindowRoughness")),
           windowReflectivity(shader.uniform("uWindowReflectivity")), hasWindows(shader.uniform("uHasWindows")),
           glassMap(shader.uniform("uGlassMap")), hasGlassMap(shader.uniform("uHasGlassMap")),
@@ -349,7 +365,7 @@ struct SkyscraperProgram {
           windowBackingTint(shader.uniform("uWindowBackingTint")), panorama(shader.uniform("uPanorama")),
           panoramaOffset(shader.uniform("uPanoramaOffset")), hasSkyPanorama(shader.uniform("uHasSkyPanorama")),
           skyPanoramaNight(shader.uniform("uSkyPanoramaNight")), haze(shader.uniform("uHaze")),
-          hazeColor(shader.uniform("uHazeColor")), maps(shader), clouds(shader) {}
+          hazeColor(shader.uniform("uHazeColor")), maps(shader), clouds(shader), pointLights(shader) {}
 };
 
 struct MaterialProgram {
@@ -378,10 +394,12 @@ struct MaterialProgram {
     int surfaceRoughness;
     int surfaceMetallic;
     int surfaceReflectivity;
+    int surfaceReflectance;
     int sunDir;
     int ambient;
     int cameraPosition;
     int skyColor;
+    int horizonRadiance;
     int sunColor;
     int hazeColor;
     int vertexLighting;
@@ -399,6 +417,10 @@ struct MaterialProgram {
     int time;
     int heat;
     MaterialMapUniforms maps;
+    PointLightUniforms pointLights;
+    int emissiveTexture;
+    int hasEmissiveTexture;
+    int emissiveFactor;
     MaterialProgram()
         : shader(shaders::material_vert, shaders::material_frag, "material", materialTextureSource,
                  shaders::vertex_snap_glsl),
@@ -413,17 +435,22 @@ struct MaterialProgram {
           texOffset(shader.uniform("uTexOffset")), lod(shader.uniform("uLod")), color(shader.uniform("uColor")),
           colorIsLinear(shader.uniform("uColorIsLinear")), surfaceRoughness(shader.uniform("uSurfaceRoughness")),
           surfaceMetallic(shader.uniform("uSurfaceMetallic")),
-          surfaceReflectivity(shader.uniform("uSurfaceReflectivity")), sunDir(shader.uniform("uSunDir")),
+          surfaceReflectivity(shader.uniform("uSurfaceReflectivity")),
+          surfaceReflectance(shader.uniform("uSurfaceReflectance")), sunDir(shader.uniform("uSunDir")),
           ambient(shader.uniform("uAmbient")), cameraPosition(shader.uniform("uCameraPosition")),
-          skyColor(shader.uniform("uSkyColor")), sunColor(shader.uniform("uSunColor")),
-          hazeColor(shader.uniform("uHazeColor")), vertexLighting(shader.uniform("uVertexLighting")),
-          shadowMap(shader.uniform("uShadowMap")), shadowDitherStrength(shader.uniform("uShadowDitherStrength")),
+          skyColor(shader.uniform("uSkyRadiance")), horizonRadiance(shader.uniform("uHorizonRadiance")),
+          sunColor(shader.uniform("uSunRadiance")), hazeColor(shader.uniform("uHazeColor")),
+          vertexLighting(shader.uniform("uVertexLighting")), shadowMap(shader.uniform("uShadowMap")),
+          shadowDitherStrength(shader.uniform("uShadowDitherStrength")),
           ditheredShadows(shader.uniform("uDitheredShadows")),
           ditheredShadowDarkness(shader.uniform("uDitheredShadowDarkness")),
           receivesShadow(shader.uniform("uReceivesShadow")), affine(shader.uniform("uAffine")),
           alpha(shader.uniform("uAlpha")), alphaCutoff(shader.uniform("uAlphaCutoff")),
           baseAlpha(shader.uniform("uBaseAlpha")), doubleSided(shader.uniform("uDoubleSided")),
-          haze(shader.uniform("uHaze")), time(shader.uniform("uTime")), heat(shader.uniform("uHeat")), maps(shader) {}
+          haze(shader.uniform("uHaze")), time(shader.uniform("uTime")), heat(shader.uniform("uHeat")), maps(shader),
+          pointLights(shader), emissiveTexture(shader.uniform("uEmissiveTexture")),
+          hasEmissiveTexture(shader.uniform("uHasEmissiveTexture")), emissiveFactor(shader.uniform("uEmissiveFactor")) {
+    }
 };
 
 struct ModelProgram {

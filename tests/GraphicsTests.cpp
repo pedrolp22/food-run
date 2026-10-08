@@ -18,6 +18,7 @@
 using namespace engine::graphics;
 void sceneryChecks(const game::GameAssets& assets, game::WorldScene& world, Size size);
 void skyCycleChecks(const game::GameAssets& assets, game::WorldScene& world, Size size);
+void streetLampChecks(const game::GameAssets& assets, game::WorldScene& world, Size size);
 namespace {
 std::vector<unsigned char> capture(Size size) {
     std::vector<unsigned char> pixels(static_cast<std::size_t>(size.width) * size.height * 3);
@@ -33,7 +34,7 @@ void checkState() {
     GLint sampler = -1;
     glGetBooleanv(GL_DEPTH_WRITEMASK, &depthMask);
     glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &framebuffer);
-    for (GLuint unit = 0; unit <= 12; ++unit) {
+    for (GLuint unit = 0; unit <= 13; ++unit) {
         glGetIntegeri_v(GL_SAMPLER_BINDING, unit, &sampler);
         CHECK(sampler == 0);
     }
@@ -2159,6 +2160,7 @@ void sceneChecks() {
     buildingMaterialChecks(assets, window.drawableSize());
     streetMaterialChecks(assets, world, window.drawableSize());
     sceneryChecks(assets, world, window.drawableSize());
+    streetLampChecks(assets, world, window.drawableSize());
     surfaceDetailChecks(assets, window.drawableSize());
     gameReflectionChecks(assets, world, window.drawableSize());
     streetBumpChecks(assets, window.drawableSize());

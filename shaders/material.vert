@@ -35,6 +35,6 @@ void main() {
     vAffineTexCoord = vTexCoord;
     vec3 normal = normalize(vNormal);
     float ambient = clamp(uAmbient * (0.95 + 0.30 * normal.y), 0.0, 1.0);
-    float diffuse = max(dot(normal, normalize(uSunDir)), 0.0);
+    float diffuse = max(dot(normal, uSunDir), 0.0);
     vVertexLight = floor(vec2(ambient, (1.0 - ambient) * diffuse) * 255.0 + 0.5) / 255.0;
 }
