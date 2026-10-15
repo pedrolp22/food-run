@@ -1,6 +1,7 @@
 #include "Game.h"
 #include "GameConfig.h"
 #include <SDL2/SDL.h>
+#include <algorithm>
 #include <chrono>
 #include <iomanip>
 #include <sstream>
@@ -32,6 +33,13 @@ int Game::run() {
             renderer_.renderMenu(std::chrono::duration<float>(now.time_since_epoch()).count(), menuSelection_);
             continue;
         }
+        float cameraBlend = 1;
+        if (cameraTransitionActive_) {
+            cameraTransitionElapsed_ = std::min(cameraTransitionElapsed_ + std::max(elapsed, 0.0f),
+                                                GameConfig::kCameraTransitionSeconds);
+            cameraBlend = cameraTransitionElapsed_ / GameConfig::kCameraTransitionSeconds;
+            cameraTransitionActive_ = cameraBlend < 1;
+        }
         const bool wasGameOver = simulation_.state().gameOver;
         clock_.advance(elapsed, [this](float dt) {
             simulation_.update(dt);
@@ -46,7 +54,8 @@ int Game::run() {
         // Freeze at the final simulation time on game over; resetGame also clears the remainder.
         const float visualTime = state.time + (state.gameOver ? 0 : clock_.remainder());
         renderer_.render(state.playerX, state.roadScroll, visualTime, state.score, state.entities, state.collectEffects,
-                         clock_.remainder(), state.dayNight.nightBlend(state.gameOver ? 0 : clock_.remainder()));
+                         clock_.remainder(), state.dayNight.nightBlend(state.gameOver ? 0 : clock_.remainder()),
+                         state.gameOver ? 0 : state.speed, cameraBlend);
     }
     return 0;
 }
@@ -135,6 +144,8 @@ void Game::handleEvents() {
 void Game::activateMenuSelection() {
     if (menuSelection_ == 0) {
         resetGame();
+        cameraTransitionElapsed_ = 0;
+        cameraTransitionActive_ = true;
         inMenu_ = false;
     } else if (menuSelection_ == 3) {
         running_ = false;

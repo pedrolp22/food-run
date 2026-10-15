@@ -11,6 +11,27 @@ constexpr std::array<float, kLaneCount> kLanePositions = {-2.2f, 0.0f, 2.2f};
 
 constexpr float kPlayerZ = 3.0f;
 constexpr float kPlayerScale = 0.9f;
+constexpr float kPlayerModelHeight = 1.75f;
+constexpr float kPlayerRunStride = 4.8f; // Scrolled world units per complete left/right running cycle.
+constexpr float kPlayerRunBobHeight = .035f;
+constexpr float kPlayerAnimationResponse = 16; // Pose and lane lean response per second.
+constexpr float kPlayerLaneLeanDegrees = 12;
+constexpr float kPlayerLaneTurnDegrees = 16;
+constexpr float kCameraHeight = 6.8f;
+constexpr float kCameraZ = 11.0f;
+constexpr float kCameraTargetHeight = 0.5f;
+constexpr float kCameraTargetZ = -14.0f;
+constexpr float kCameraVerticalFov = 60.0f;
+constexpr float kCameraFisheyeStrength = 0.095f;
+constexpr float kPlayerMenuTapPeriod = 1.15f;
+constexpr float kMenuCameraHeight = 0.25f;
+constexpr float kMenuCameraZ = 7.0f;
+constexpr float kMenuCameraLookHeight = 1.25f;
+constexpr float kMenuCameraLookZ = kPlayerZ;
+constexpr float kMenuCameraFov = 66.0f;
+constexpr float kCameraTransitionSeconds = 1.4f;
+constexpr float kMenuCatX = kLanePositions[kLaneCount / 2];
+constexpr float kMenuCatZ = kPlayerZ;
 constexpr float kLaneChangeSpeed = 12.0f;
 constexpr float kInitialSpeed = 10.0f;
 constexpr float kMinSpeed = 4.0f;
@@ -152,12 +173,6 @@ constexpr bool kPsxFogFollowsSky = true; // Match the bright sky's horizon and i
 constexpr float kWorldCurvature = 0.0008f;
 constexpr float kRoadSway = 0.7f;
 
-constexpr float kCameraHeight = 6.8f;
-constexpr float kCameraZ = 11.0f;
-constexpr float kCameraTargetHeight = 0.5f;
-constexpr float kCameraTargetZ = -14.0f;
-constexpr float kCameraVerticalFov = 60.0f;
-constexpr float kCameraFisheyeStrength = 0.095f;
 } // namespace GameConfig
 
 #endif // SUBWAY_GAMECONFIG_H

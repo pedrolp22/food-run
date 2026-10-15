@@ -22,15 +22,24 @@ noperspective out vec2 vAffineTexCoord;
 noperspective out vec2 vVertexLight;
 
 void main() {
-    vec4 worldPosition = uModel * vec4(aPosition, 1.0);
+    vec3 position = aPosition;
+    mat3 normalTransform = mat3(uModel);
+#ifdef MODEL_MAX_SKIN_JOINTS
+    if (uSkinned) {
+        mat4 deformation = skinMatrix();
+        position = (deformation * vec4(aPosition, 1.0)).xyz;
+        normalTransform *= mat3(deformation);
+    }
+#endif
+    vec4 worldPosition = uModel * vec4(position, 1.0);
     clipReflection(worldPosition);
     vWorldPosition = worldPosition.xyz;
-    vDitherPosition = surfaceDitherPosition(aPosition, uModel);
+    vDitherPosition = surfaceDitherPosition(position, uModel);
     vShadowPosition = uLightViewProj * worldPosition;
-    gl_Position = snapVertex(uMvp * vec4(aPosition, 1.0));
+    gl_Position = snapVertex(uMvp * vec4(position, 1.0));
     // The compact quad mesh stores UV xy at location 1, while models and cubes
     // store a normal there. Its authored face normal is already in world space.
-    vNormal = uQuad ? uFaceNormal : transpose(inverse(mat3(uModel))) * aNormal;
+    vNormal = uQuad ? uFaceNormal : transpose(inverse(normalTransform)) * aNormal;
     vTexCoord = (uQuad ? aNormal.xy : aTexCoord) * uTexScale + uTexOffset;
     vAffineTexCoord = vTexCoord;
     vec3 normal = normalize(vNormal);

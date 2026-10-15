@@ -5,6 +5,10 @@
 namespace engine::graphics {
 Model::Model(const std::filesystem::path& path, float targetHeight) : Model(assets::loadGltf(path, targetHeight)) {}
 Model::Model(const assets::ModelData& data) {
+    if (!data.nodes.empty()) {
+        animationData_ = std::make_unique<assets::ModelData>(data);
+        bindPose_ = std::make_unique<assets::ModelPose>(*animationData_);
+    }
     const float infinity = std::numeric_limits<float>::infinity();
     math::Vec3 minimum{infinity, infinity, infinity}, maximum{-infinity, -infinity, -infinity};
     primitives_.reserve(data.primitives.size());
@@ -18,8 +22,23 @@ Model::Model(const assets::ModelData& data) {
             maximum.z = std::max(maximum.z, source.vertices[i + 2]);
         }
         Primitive primitive;
-        primitive.mesh =
-            Mesh(source.vertices, assets::kModelVertexStride, {{0, 3, 0}, {1, 3, 3}, {2, 2, 6}}, source.indices);
+        if (source.skin >= 0) {
+            std::vector<float> skinned;
+            skinned.reserve(source.influences.size() * 16);
+            for (std::size_t i = 0; i < source.influences.size(); ++i) {
+                const auto start = source.vertices.begin() + i * assets::kModelVertexStride;
+                skinned.insert(skinned.end(), start, start + assets::kModelVertexStride);
+                for (auto joint : source.influences[i].joints)
+                    skinned.push_back(static_cast<float>(joint));
+                for (auto weight : source.influences[i].weights)
+                    skinned.push_back(weight);
+            }
+            primitive.mesh =
+                Mesh(skinned, 16, {{0, 3, 0}, {1, 3, 3}, {2, 2, 6}, {3, 4, 8}, {4, 4, 12}}, source.indices);
+        } else {
+            primitive.mesh =
+                Mesh(source.vertices, assets::kModelVertexStride, {{0, 3, 0}, {1, 3, 3}, {2, 2, 6}}, source.indices);
+        }
         primitive.material.baseColor = source.material.baseColor;
         primitive.material.surfaceMaterial.roughness = source.material.roughness;
         primitive.material.surfaceMaterial.metallic = source.material.metallic;
@@ -63,6 +82,10 @@ Model::Model(const assets::ModelData& data) {
         boundsCenter_ = {(minimum.x + maximum.x) * .5f, (minimum.y + maximum.y) * .5f, (minimum.z + maximum.z) * .5f};
         boundsHalfExtent_ = {(maximum.x - minimum.x) * .5f, (maximum.y - minimum.y) * .5f,
                              (maximum.z - minimum.z) * .5f};
+    }
+    if (bindPose_) {
+        boundsCenter_ = bindPose_->boundsCenter();
+        boundsHalfExtent_ = bindPose_->boundsHalfExtent();
     }
 }
 } // namespace engine::graphics

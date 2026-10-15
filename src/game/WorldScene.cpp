@@ -17,7 +17,8 @@ constexpr float subLength = kLaneSegmentLength / kRoadSubdivisions;
 
 } // namespace
 WorldScene::WorldScene(const GameAssets& assets)
-    : assets_(assets), track_({kWorldCurvature, kRoadSway, -5, 24, kLaneStartZ}) {
+    : assets_(assets), player_(*assets.model(ModelId::PlayerCat).animationData()),
+      track_({kWorldCurvature, kRoadSway, -5, 24, kLaneStartZ}) {
     scene_.camera.position = {0, kCameraHeight, kCameraZ};
     scene_.camera.target = {0, kCameraTargetHeight, kCameraTargetZ};
     scene_.camera.verticalFov = kCameraVerticalFov;
@@ -62,7 +63,16 @@ WorldScene::WorldScene(const GameAssets& assets)
     scene_.pointLights.reserve(kMaxPointLights);
 }
 const Scene& WorldScene::build(float playerX, float roadScroll, float gameTime, std::span<const Entity> entities,
-                               std::span<const CollectEffect> effects, float effectRemainder, float nightBlend) {
+                               std::span<const CollectEffect> effects, float effectRemainder, float nightBlend,
+                               float playerSpeed, float cameraBlend) {
+    const float cameraT = std::clamp(cameraBlend, 0.0f, 1.0f);
+    const float easedCameraT = cameraT * cameraT * (3.0f - 2.0f * cameraT);
+    const auto blend = [easedCameraT](float from, float to) { return std::lerp(from, to, easedCameraT); };
+    scene_.camera.position = {0, blend(kMenuCameraHeight, kCameraHeight), blend(kMenuCameraZ, kCameraZ)};
+    scene_.camera.target = {0, blend(kMenuCameraLookHeight, kCameraTargetHeight),
+                            blend(kMenuCameraLookZ, kCameraTargetZ)};
+    scene_.camera.verticalFov = blend(kMenuCameraFov, kCameraVerticalFov);
+    scene_.camera.fisheyeStrength = blend(0.0f, kCameraFisheyeStrength);
     scene_.time = gameTime;
     scene_.sky.nightBlend = std::isfinite(nightBlend) ? std::clamp(nightBlend, 0.0f, 1.0f) : 0;
     const float phase = scene_.sky.nightBlend;
@@ -95,9 +105,21 @@ const Scene& WorldScene::build(float playerX, float roadScroll, float gameTime, 
     addSidewalk(roadScroll);
     addParks(roadScroll);
     addLeaves(playerX, roadScroll);
-    addCube(
-        {playerX + track_.offset(kPlayerZ), kPlayerScale * 0.5f, kPlayerZ, kPlayerScale, kPlayerScale, kPlayerScale},
-        {0.12f, 0.55f, 1.0f});
+    player_.update(playerX, roadScroll + std::max(playerSpeed, 0.f) * effectRemainder, gameTime, playerSpeed);
+    const auto& pose = player_.pose();
+    const auto anchor = player_.anchor();
+    const float groundY = pose.boundsCenter().y - pose.boundsHalfExtent().y;
+    const float gameplayYaw = kPi * .5f + player_.heading();
+    const float menuYaw = -kPi * .5f + radians(10);
+    const float characterYaw = std::lerp(menuYaw, gameplayYaw, easedCameraT);
+    ModelInstance character;
+    character.model = &assets_.model(ModelId::PlayerCat);
+    character.pbrSurface = true;
+    character.pose = &pose;
+    character.transform =
+        multiply(translation({playerX + track_.offset(kPlayerZ), -track_.drop(kPlayerZ) + player_.lift(), kPlayerZ}),
+                 multiply(rotateY(characterYaw), translation({-anchor.x, -groundY, -anchor.z})));
+    scene_.objects.emplace_back(character);
     addStreetLamps(roadScroll);
     addDecor();
     addEntities(entities);

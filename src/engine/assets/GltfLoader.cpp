@@ -102,6 +102,7 @@ struct AccessorInfo {
     int count = 0;
     int byteStride = 0;
     const unsigned char* data = nullptr;
+    bool normalized = false;
 };
 
 bool readAccessor(const JsonValue& gltf, std::span<const unsigned char> binary, int accessorIndex, AccessorInfo& out) {
@@ -114,6 +115,8 @@ bool readAccessor(const JsonValue& gltf, std::span<const unsigned char> binary, 
     }
     out.componentType = integer(*accessor, "componentType");
     out.count = integer(*accessor, "count");
+    const auto* normalized = accessor->obj("normalized");
+    out.normalized = normalized && normalized->type == JsonValue::Type::Bool && normalized->boolean;
     if (out.count <= 0 || (out.componentType != kCompUbyte && out.componentType != kCompUshort &&
                            out.componentType != kCompUint && out.componentType != kCompFloat)) {
         fail();
@@ -130,6 +133,8 @@ bool readAccessor(const JsonValue& gltf, std::span<const unsigned char> binary, 
         out.components = 3;
     } else if (type->string == "VEC4") {
         out.components = 4;
+    } else if (type->string == "MAT4") {
+        out.components = 16;
     } else {
         fail();
     }
@@ -208,10 +213,17 @@ Mat4 computeNodeMatrix(const JsonValue& node) {
     return multiply(multiply(T, R), S);
 }
 
-std::vector<std::pair<int, Mat4>> collectMeshNodes(const JsonValue& root) {
+struct MeshNode {
+    int mesh, node, skin;
+    Mat4 world;
+};
+std::vector<MeshNode> collectMeshNodes(const JsonValue& root, ModelData& data) {
     const auto* nodes = root.obj("nodes");
     const auto* scenes = root.obj("scenes");
-    std::vector<std::pair<int, Mat4>> meshNodes;
+    std::vector<MeshNode> meshNodes;
+    const bool rigged = root.obj("skins") && root.obj("skins")->size() > 0;
+    if (rigged)
+        data.nodes.resize(nodes->size());
     {
         std::vector<Mat4> worlds(static_cast<std::size_t>(nodes->size()));
 
@@ -229,7 +241,8 @@ std::vector<std::pair<int, Mat4>> collectMeshNodes(const JsonValue& root) {
         }
 
         std::vector<int> visited(static_cast<std::size_t>(nodes->size()), 0);
-        const auto visit = [&](const auto& self, int nodeIndex, const Mat4& parentWorld, int depth) -> void {
+        const auto visit = [&](const auto& self, int nodeIndex, const Mat4& parentWorld, int parent,
+                               int depth) -> void {
             if (depth > 256) {
                 throw std::runtime_error("glTF node hierarchy is too deep");
             }
@@ -241,15 +254,20 @@ std::vector<std::pair<int, Mat4>> collectMeshNodes(const JsonValue& root) {
             const Mat4 local = computeNodeMatrix(*node);
             const Mat4 world = multiply(parentWorld, local);
             worlds[static_cast<std::size_t>(nodeIndex)] = world;
+            if (rigged) {
+                const auto* name = node->obj("name");
+                data.nodes[nodeIndex] = {name ? name->string : "", parent, local, world};
+                data.nodeOrder.push_back(nodeIndex);
+            }
             const JsonValue* children = node->obj("children");
             if (children) {
                 for (int i = 0; i < children->size(); ++i) {
-                    self(self, children->at(i)->asInt(-1), world, depth + 1);
+                    self(self, children->at(i)->asInt(-1), world, nodeIndex, depth + 1);
                 }
             }
         };
         for (const int root : sceneRoots) {
-            visit(visit, root, identity(), 0);
+            visit(visit, root, identity(), -1, 0);
         }
 
         for (int i = 0; i < nodes->size(); ++i) {
@@ -258,7 +276,7 @@ std::vector<std::pair<int, Mat4>> collectMeshNodes(const JsonValue& root) {
             if (!meshNode || !visited[static_cast<std::size_t>(i)]) {
                 continue;
             }
-            meshNodes.emplace_back(meshNode->asInt(0), worlds[static_cast<std::size_t>(i)]);
+            meshNodes.push_back({meshNode->asInt(-1), i, integer(*node, "skin"), worlds[static_cast<std::size_t>(i)]});
         }
         if (meshNodes.empty()) {
 
@@ -303,16 +321,58 @@ ModelData loadModel(const std::filesystem::path& path, float targetHeight) {
     if (uriNode && uriNode->type == JsonValue::Type::String) {
         std::string binaryText;
         if (!readFileToString(baseDir + "/" + uriNode->string, binaryText)) {
-
-            throw std::runtime_error("Could not import glTF: " + gltfPath);
+            throw std::runtime_error("Cannot open glTF buffer: " +
+                                     (std::filesystem::path(baseDir) / uriNode->string).string());
         }
         binary.assign(binaryText.begin(), binaryText.end());
+        const int length = integer(*bufferNode, "byteLength");
+        if (length < 1 || binary.size() < static_cast<std::size_t>(length)) {
+            throw std::runtime_error("Missing or truncated glTF buffer data");
+        }
+        binary.resize(length);
     } else {
 
         throw std::runtime_error("Could not import glTF: " + gltfPath);
     }
 
-    const auto meshNodes = collectMeshNodes(root);
+    ModelData result;
+    const auto meshNodes = collectMeshNodes(root, result);
+    if (const auto* skins = root.obj("skins")) {
+        for (int i = 0; i < skins->size(); ++i) {
+            const auto* skin = skins->at(i);
+            const auto* joints = skin->obj("joints");
+            if (!joints || joints->size() < 1 || joints->size() > static_cast<int>(kMaxSkinJoints)) {
+                throw std::runtime_error("Invalid glTF skin joint count (maximum " + std::to_string(kMaxSkinJoints) + ")");
+            }
+            SkinData imported;
+            for (int j = 0; j < joints->size(); ++j) {
+                const int node = joints->at(j)->asInt(-1);
+                if (node < 0 || node >= static_cast<int>(result.nodes.size()) ||
+                    std::find(result.nodeOrder.begin(), result.nodeOrder.end(), node) == result.nodeOrder.end() ||
+                    std::find(imported.joints.begin(), imported.joints.end(), node) != imported.joints.end()) {
+                    throw std::runtime_error("Invalid glTF skin joint reference");
+                }
+                imported.joints.push_back(node);
+            }
+            imported.inverseBindMatrices.resize(imported.joints.size(), identity());
+            if (const auto* bind = skin->obj("inverseBindMatrices")) {
+                AccessorInfo info;
+                readAccessor(root, binary, bind->asInt(-1), info);
+                if (info.componentType != kCompFloat || info.components != 16 || info.count < joints->size()) {
+                    throw std::runtime_error("Invalid glTF inverse bind matrices");
+                }
+                for (int j = 0; j < joints->size(); ++j) {
+                    std::memcpy(imported.inverseBindMatrices[j].values.data(), info.data + j * info.byteStride,
+                                sizeof(Mat4));
+                    for (float value : imported.inverseBindMatrices[j].values) {
+                        if (!std::isfinite(value))
+                            throw std::runtime_error("Non-finite glTF inverse bind matrix");
+                    }
+                }
+            }
+            result.skins.push_back(std::move(imported));
+        }
+    }
 
     std::vector<PrimitiveData> primitives;
     primitives.reserve(static_cast<std::size_t>(meshNodes.size()));
@@ -325,8 +385,11 @@ ModelData loadModel(const std::filesystem::path& path, float targetHeight) {
     float maxZ = -std::numeric_limits<float>::max();
 
     for (const auto& entry : meshNodes) {
-        const int meshIndex = entry.first;
-        const Mat4& world = entry.second;
+        const int meshIndex = entry.mesh;
+        if (entry.skin >= static_cast<int>(result.skins.size()))
+            throw std::runtime_error("Invalid glTF mesh skin");
+        // glTF skinned positions live in bind space; the mesh node's transform is ignored for skinning.
+        const Mat4 world = entry.skin >= 0 ? identity() : entry.world;
         const JsonValue* mesh = meshes->at(meshIndex);
         if (!mesh) {
             throw std::runtime_error("Invalid glTF mesh reference");
@@ -385,6 +448,48 @@ ModelData loadModel(const std::filesystem::path& path, float targetHeight) {
                 throw std::runtime_error("Unsupported glTF vertex or index layout");
             }
             PrimitiveData data;
+            data.node = result.nodes.empty() ? -1 : entry.node;
+            data.skin = entry.skin;
+            if (entry.skin >= 0) {
+                AccessorInfo jointInfo, weightInfo;
+                readAccessor(root, binary, integer(*attributes, "JOINTS_0"), jointInfo);
+                readAccessor(root, binary, integer(*attributes, "WEIGHTS_0"), weightInfo);
+                if (jointInfo.components != 4 || weightInfo.components != 4 || jointInfo.count != posInfo.count ||
+                    weightInfo.count != posInfo.count || jointInfo.normalized ||
+                    (jointInfo.componentType != kCompUbyte && jointInfo.componentType != kCompUshort) ||
+                    (weightInfo.componentType == kCompFloat && weightInfo.normalized) ||
+                    (weightInfo.componentType != kCompFloat &&
+                     !((weightInfo.componentType == kCompUbyte || weightInfo.componentType == kCompUshort) &&
+                       weightInfo.normalized)) ||
+                    attributes->obj("JOINTS_1") || attributes->obj("WEIGHTS_1")) {
+                    throw std::runtime_error("Unsupported glTF skin vertex layout");
+                }
+                data.influences.resize(posInfo.count);
+                for (int v = 0; v < posInfo.count; ++v) {
+                    auto& influence = data.influences[v];
+                    float sum = 0;
+                    for (int j = 0; j < 4; ++j) {
+                        influence.joints[j] = readElementAsUint(jointInfo.data + v * jointInfo.byteStride +
+                                                                    j * componentByteSize(jointInfo.componentType),
+                                                                jointInfo.componentType);
+                        float weight = readElementAsFloat(weightInfo.data + v * weightInfo.byteStride +
+                                                              j * componentByteSize(weightInfo.componentType),
+                                                          weightInfo.componentType);
+                        if (weightInfo.normalized)
+                            weight /= weightInfo.componentType == kCompUbyte ? 255.f : 65535.f;
+                        if (influence.joints[j] >= result.skins[entry.skin].joints.size() || !std::isfinite(weight) ||
+                            weight < 0) {
+                            throw std::runtime_error("Invalid glTF joint index or weight");
+                        }
+                        influence.weights[j] = weight;
+                        sum += weight;
+                    }
+                    if (!std::isfinite(sum) || sum <= 0)
+                        throw std::runtime_error("Unweighted glTF skin vertex");
+                    for (auto& weight : influence.weights)
+                        weight /= sum;
+                }
+            }
             data.vertices.reserve(static_cast<std::size_t>(posInfo.count) * kModelVertexStride);
             data.indices.reserve(static_cast<std::size_t>(indexInfo.count));
 
@@ -424,12 +529,27 @@ ModelData loadModel(const std::filesystem::path& path, float targetHeight) {
                 data.vertices.push_back(u);
                 data.vertices.push_back(v);
 
-                minX = std::min(minX, p.x);
-                maxX = std::max(maxX, p.x);
-                minY = std::min(minY, p.y);
-                maxY = std::max(maxY, p.y);
-                minZ = std::min(minZ, p.z);
-                maxZ = std::max(maxZ, p.z);
+                Vec3 bound = p;
+                if (entry.skin >= 0) {
+                    bound = {};
+                    const auto& influence = data.influences[vertex];
+                    const auto& skin = result.skins[entry.skin];
+                    for (int j = 0; j < 4; ++j) {
+                        const auto posed =
+                            transformPoint(multiply(result.nodes[skin.joints[influence.joints[j]]].worldBind,
+                                                    skin.inverseBindMatrices[influence.joints[j]]),
+                                           p);
+                        bound.x += posed.x * influence.weights[j];
+                        bound.y += posed.y * influence.weights[j];
+                        bound.z += posed.z * influence.weights[j];
+                    }
+                }
+                minX = std::min(minX, bound.x);
+                maxX = std::max(maxX, bound.x);
+                minY = std::min(minY, bound.y);
+                maxY = std::max(maxY, bound.y);
+                minZ = std::min(minZ, bound.z);
+                maxZ = std::max(maxZ, bound.z);
             }
 
             for (int index = 0; index < indexInfo.count; ++index) {
@@ -559,19 +679,23 @@ ModelData loadModel(const std::filesystem::path& path, float targetHeight) {
 
         throw std::runtime_error("Could not import glTF: " + gltfPath);
     }
-    const float scale = targetHeight / height;
+    const float sizeScale = targetHeight / height;
     const float centerX = (minX + maxX) * 0.5f;
     const float centerZ = (minZ + maxZ) * 0.5f;
 
     for (PrimitiveData& data : primitives) {
         for (std::size_t vertex = 0; vertex < data.vertices.size(); vertex += kModelVertexStride) {
-            data.vertices[vertex] = (data.vertices[vertex] - centerX) * scale;
-            data.vertices[vertex + 1] = (data.vertices[vertex + 1] - minY) * scale;
-            data.vertices[vertex + 2] = (data.vertices[vertex + 2] - centerZ) * scale;
+            data.vertices[vertex] = (data.vertices[vertex] - centerX) * sizeScale;
+            data.vertices[vertex + 1] = (data.vertices[vertex + 1] - minY) * sizeScale;
+            data.vertices[vertex + 2] = (data.vertices[vertex + 2] - centerZ) * sizeScale;
         }
     }
 
-    return {std::move(primitives)};
+    result.normalization =
+        multiply(math::scale({sizeScale, sizeScale, sizeScale}), translation({-centerX, -minY, -centerZ}));
+    result.denormalization = inverseAffine(result.normalization);
+    result.primitives = std::move(primitives);
+    return result;
 }
 
 } // namespace

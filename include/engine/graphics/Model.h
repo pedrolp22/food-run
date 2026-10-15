@@ -1,10 +1,12 @@
 #pragma once
 
 #include "engine/assets/GltfLoader.h"
+#include "engine/assets/ModelPose.h"
 #include "engine/graphics/Material.h"
 #include "engine/graphics/Mesh.h"
 #include "engine/graphics/Texture.h"
 #include "engine/math/Math.h"
+#include <memory>
 
 namespace engine::graphics {
 class Model {
@@ -49,10 +51,14 @@ class Model {
     const std::vector<Primitive>& primitives() const { return primitives_; }
     math::Vec3 boundsCenter() const { return boundsCenter_; }
     math::Vec3 boundsHalfExtent() const { return boundsHalfExtent_; }
+    const assets::ModelData* animationData() const { return animationData_.get(); }
+    const assets::ModelPose* bindPose() const { return bindPose_.get(); }
 
   private:
     std::vector<Primitive> primitives_;
     math::Vec3 boundsCenter_{};
     math::Vec3 boundsHalfExtent_{};
+    std::unique_ptr<assets::ModelData> animationData_;
+    std::unique_ptr<assets::ModelPose> bindPose_;
 };
 } // namespace engine::graphics

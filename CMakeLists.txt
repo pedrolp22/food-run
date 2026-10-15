@@ -26,7 +26,7 @@ function(subway_library target alias)
 endfunction()
 
 subway_library(subway_math math src/engine/math/Math.cpp src/engine/math/TrackCurve.cpp)
-subway_library(subway_assets assets src/engine/assets/Json.cpp src/engine/assets/GltfLoader.cpp
+subway_library(subway_assets assets src/engine/assets/Json.cpp src/engine/assets/GltfLoader.cpp src/engine/assets/ModelPose.cpp
     src/engine/assets/SpriteGeometry.cpp src/engine/assets/AlphaDistanceField.cpp)
 target_link_libraries(subway_assets PUBLIC subway::math)
 subway_library(subway_gameplay gameplay src/game/Simulation.cpp src/game/Collision.cpp src/game/DayNightCycle.cpp)
@@ -47,7 +47,8 @@ if(SUBWAY_BUILD_GRAPHICS)
         src/engine/graphics/Mesh.cpp src/engine/graphics/BuiltinMeshes.cpp src/engine/graphics/SpriteOutline.cpp
         src/engine/graphics/RenderTarget.cpp src/engine/graphics/ReflectionMap.cpp src/engine/graphics/Model.cpp
         src/engine/graphics/Scene.cpp src/engine/graphics/SceneRenderer.cpp src/engine/graphics/PlanarReflectionPass.cpp
-        src/engine/graphics/SceneVisibility.cpp src/engine/graphics/FrameLighting.cpp src/engine/graphics/RenderSettings.cpp)
+        src/engine/graphics/SceneVisibility.cpp src/engine/graphics/FrameLighting.cpp src/engine/graphics/RenderSettings.cpp
+        src/engine/graphics/Skinning.cpp)
     target_include_directories(subway_graphics PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
     target_link_libraries(subway_graphics PUBLIC subway::assets subway::math PRIVATE subway_glad subway_stb)
 endif()
@@ -86,7 +87,7 @@ if(SUBWAY_BUILD_GAME OR SUBWAY_ENABLE_GRAPHICS_TESTS)
         message(FATAL_ERROR "Game/graphics tests require graphics and platform libraries")
     endif()
     subway_library(subway_world world src/game/GameAssets.cpp src/game/WorldScene.cpp src/game/SceneCommands.cpp
-        src/game/Scenery.cpp src/game/Leaves.cpp)
+        src/game/Scenery.cpp src/game/Leaves.cpp src/game/PlayerCharacter.cpp)
     target_link_libraries(subway_world PUBLIC subway::graphics subway::gameplay)
 endif()
 if(SUBWAY_BUILD_GAME)

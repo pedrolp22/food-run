@@ -3,6 +3,7 @@
 #include "engine/graphics/Scene.h"
 #include "engine/math/TrackCurve.h"
 #include "game/GameAssets.h"
+#include "game/PlayerCharacter.h"
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -16,7 +17,8 @@ class WorldScene {
     explicit WorldScene(const GameAssets& assets);
     const engine::graphics::Scene& build(float playerX, float roadScroll, float gameTime,
                                          std::span<const Entity> entities, std::span<const CollectEffect> effects,
-                                         float effectRemainder = 0, float nightBlend = 0);
+                                         float effectRemainder = 0, float nightBlend = 0, float playerSpeed = 0,
+                                         float cameraBlend = 1);
 
   private:
     enum class Face { FrontBack, Side, Top };
@@ -77,6 +79,7 @@ class WorldScene {
                         bool receivesShadow = true, bool followsGround = false);
     engine::graphics::Sprite makeCollectibleSprite(const Entity& entity, float animationTime) const;
     const GameAssets& assets_;
+    PlayerCharacter player_;
     engine::math::TrackCurve track_;
     engine::graphics::Scene scene_;
 };

@@ -62,6 +62,13 @@ float ditheredShadowAmbient(float visibility, float diffuse) {
     return uDitheredShadows ? 1.0 - uDitheredShadowDarkness * (1.0 - visibility) * facing : 1.0;
 }
 
+float ambientOcclusionVisibility(float visibility) {
+    // Let the existing scene-wide shadow map occlude part of the sky/ambient
+    // fill as well as direct sunlight. Keeping this softer than direct shadow
+    // visibility grounds every receiver without adding another render pass.
+    return uDitheredShadows ? 1.0 : mix(1.0, clamp(visibility, 0.0, 1.0), 0.42);
+}
+
 float sunVisibility(float diffuse) {
     vec3 projected = vShadowPosition.xyz / vShadowPosition.w * 0.5 + 0.5;
     vec2 depthGradient = vec2(0.0);

@@ -10,6 +10,9 @@
 #include <variant>
 #include <vector>
 
+namespace engine::assets {
+class ModelPose;
+}
 namespace engine::graphics {
 class Model;
 class Mesh;
@@ -108,7 +111,7 @@ struct MenuOverlay {
     int selection = 0;
     float time = 0;
 };
-// Commands borrow assets. Keep those assets alive and unmoved until render() returns.
+// Commands borrow assets and evaluated poses. Keep them alive, unmoved and unchanged until render() returns.
 struct Quad {
     math::Mat4 model = math::identity();
     math::Vec3 normal = {0, 1, 0};
@@ -149,7 +152,8 @@ struct ModelInstance {
     const Model* model = nullptr;
     bool pbrSurface = false;                           // Use each primitive's imported material factors.
     std::optional<SurfaceMaterial> materialOverride{}; // Optional finish override for this instance only.
-    float emissiveScale = 1; // PBR emission multiplier; zero switches off the imported luminous texels.
+    float emissiveScale = 1;                 // PBR emission multiplier; zero switches off the imported luminous texels.
+    const assets::ModelPose* pose = nullptr; // Borrowed per-instance pose; null selects the model's bind pose.
 };
 struct SpriteRipple {
     const SpriteOutline* shape = nullptr;

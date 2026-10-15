@@ -17,11 +17,20 @@ noperspective out vec2 vAffineUv;
 noperspective out vec2 vVertexLight;
 
 void main() {
-    clipReflection(uModel * vec4(aPosition, 1.0));
-    vDitherPosition = surfaceDitherPosition(aPosition, uModel);
-    vShadowPosition = uLightViewProj * uModel * vec4(aPosition, 1.0);
-    gl_Position = snapVertex(uMvp * vec4(aPosition, 1.0));
-    vNormal = transpose(inverse(mat3(uModel))) * aNormal;
+    vec3 position = aPosition;
+    mat3 normalTransform = mat3(uModel);
+#ifdef MODEL_MAX_SKIN_JOINTS
+    if (uSkinned) {
+        mat4 deformation = skinMatrix();
+        position = (deformation * vec4(aPosition, 1.0)).xyz;
+        normalTransform *= mat3(deformation);
+    }
+#endif
+    clipReflection(uModel * vec4(position, 1.0));
+    vDitherPosition = surfaceDitherPosition(position, uModel);
+    vShadowPosition = uLightViewProj * uModel * vec4(position, 1.0);
+    gl_Position = snapVertex(uMvp * vec4(position, 1.0));
+    vNormal = transpose(inverse(normalTransform)) * aNormal;
     vec3 normal = normalize(vNormal);
     float ambient = clamp(uAmbient * (0.95 + 0.30 * normal.y), 0.0, 1.0);
     float diffuse = max(dot(normal, normalize(uSunDir)), 0.0);

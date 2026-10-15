@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ShaderSources.h"
+#include "Skinning.h"
 #include "engine/graphics/Scene.h"
 #include "engine/graphics/ShaderProgram.h"
 #include <array>
@@ -14,6 +15,9 @@ inline const std::string materialTextureSource = litTextureSource + "#define MAT
                                                  std::string(shaders::brdf_glsl) + std::string(shaders::material_glsl) +
                                                  std::string(shaders::material_textures_glsl);
 inline const std::string skySource = std::string(shaders::sky_panorama_glsl) + std::string(shaders::sky_clouds_glsl);
+inline const std::string skinnedVertexSource =
+    std::string(shaders::vertex_snap_glsl) + "#define MODEL_MAX_SKIN_JOINTS " + std::to_string(assets::kMaxSkinJoints) +
+    "\n" + std::string(shaders::skinning_glsl);
 struct PointLightUniforms {
     int count;
     int positions;
@@ -370,6 +374,7 @@ struct SkyscraperProgram {
 
 struct MaterialProgram {
     ShaderProgram shader;
+    SkinningUniforms skin;
     int mvp;
     int model;
     int reflectionClipPlane;
@@ -423,8 +428,8 @@ struct MaterialProgram {
     int emissiveFactor;
     MaterialProgram()
         : shader(shaders::material_vert, shaders::material_frag, "material", materialTextureSource,
-                 shaders::vertex_snap_glsl),
-          mvp(shader.uniform("uMvp")), model(shader.uniform("uModel")),
+                 skinnedVertexSource),
+          skin(shader), mvp(shader.uniform("uMvp")), model(shader.uniform("uModel")),
           reflectionClipPlane(shader.uniform("uReflectionClipPlane")), lightViewProj(shader.uniform("uLightViewProj")),
           snap(shader.uniform("uSnap")), snapStrength(shader.uniform("uSnapStrength")),
           fogRange(shader.uniform("uFogRange")), fogColor(shader.uniform("uFogColor")), quad(shader.uniform("uQuad")),
@@ -455,6 +460,7 @@ struct MaterialProgram {
 
 struct ModelProgram {
     ShaderProgram shader;
+    SkinningUniforms skin;
     int mvp;
     int model;
     int reflectionClipPlane;
@@ -478,8 +484,8 @@ struct ModelProgram {
     int ditheredShadows;
     int ditheredShadowDarkness;
     ModelProgram()
-        : shader(shaders::model_vert, shaders::model_frag, "model", litTextureSource, shaders::vertex_snap_glsl),
-          mvp(shader.uniform("uMvp")), model(shader.uniform("uModel")),
+        : shader(shaders::model_vert, shaders::model_frag, "model", litTextureSource, skinnedVertexSource),
+          skin(shader), mvp(shader.uniform("uMvp")), model(shader.uniform("uModel")),
           reflectionClipPlane(shader.uniform("uReflectionClipPlane")), lightViewProj(shader.uniform("uLightViewProj")),
           snap(shader.uniform("uSnap")), snapStrength(shader.uniform("uSnapStrength")),
           fogRange(shader.uniform("uFogRange")), fogColor(shader.uniform("uFogColor")),
@@ -544,6 +550,7 @@ struct RetroProgram : PresentationProgram {
 
 struct ShadowProgram {
     ShaderProgram shader;
+    SkinningUniforms skin;
     int mvp;
     int texture;
     int textured;
@@ -554,8 +561,8 @@ struct ShadowProgram {
     int texScale;
     int texOffset;
     ShadowProgram()
-        : shader(shaders::shadow_vert, shaders::shadow_frag, "shadow"), mvp(shader.uniform("uMvp")),
-          texture(shader.uniform("uTexture")), textured(shader.uniform("uTextured")),
+        : shader(shaders::shadow_vert, shaders::shadow_frag, "shadow", {}, skinnedVertexSource), skin(shader),
+          mvp(shader.uniform("uMvp")), texture(shader.uniform("uTexture")), textured(shader.uniform("uTextured")),
           opacity(shader.uniform("uOpacity")), alphaCutoff(shader.uniform("uAlphaCutoff")),
           baseAlpha(shader.uniform("uBaseAlpha")), modelMesh(shader.uniform("uModelMesh")),
           texScale(shader.uniform("uTexScale")), texOffset(shader.uniform("uTexOffset")) {}

@@ -2,6 +2,7 @@
 #include "engine/graphics/Model.h"
 #include <algorithm>
 #include <cmath>
+#include <stdexcept>
 #include <type_traits>
 
 namespace engine::graphics::detail {
@@ -42,9 +43,15 @@ void SceneVisibility::prepare(const Scene& scene) {
             [](const auto& item) {
                 using T = std::decay_t<decltype(item)>;
                 if constexpr (std::is_same_v<T, ModelInstance>) {
-                    return item.model
-                               ? worldBounds(item.transform, item.model->boundsCenter(), item.model->boundsHalfExtent())
-                               : WorldBounds{{}, {}, false};
+                    if (!item.model)
+                        return WorldBounds{{}, {}, false};
+                    if (item.pose && &item.pose->data() != item.model->animationData()) {
+                        throw std::invalid_argument("Model instance pose belongs to a different model");
+                    }
+                    return item.pose
+                               ? worldBounds(item.transform, item.pose->boundsCenter(), item.pose->boundsHalfExtent())
+                               : worldBounds(item.transform, item.model->boundsCenter(),
+                                             item.model->boundsHalfExtent());
                 } else if constexpr (std::is_same_v<T, Quad>) {
                     auto box = worldBounds(item.model, {}, {.5f, .5f, 0});
                     box.enabled = item.opacity > 0;

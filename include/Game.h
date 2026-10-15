@@ -23,6 +23,8 @@ class Game {
     engine::time::FixedStep clock_;
     bool running_ = false;
     bool inMenu_ = true;
+    bool cameraTransitionActive_ = false;
+    float cameraTransitionElapsed_ = 0;
     int menuSelection_ = 0;
     _SDL_GameController* controller_ = nullptr;
     float titleUpdateTimer_ = 0;

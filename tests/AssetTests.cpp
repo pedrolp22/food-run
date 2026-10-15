@@ -8,6 +8,7 @@
 #include <fstream>
 #include <limits>
 
+void skinningAssetChecks();
 namespace {
 struct Fixture {
     std::filesystem::path directory =
@@ -121,6 +122,7 @@ void spriteGeometryChecks() {
 }
 } // namespace
 void assetTests() {
+    skinningAssetChecks();
     distanceFieldChecks();
     spriteGeometryChecks();
     using namespace engine::assets;

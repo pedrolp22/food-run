@@ -51,7 +51,7 @@ responsible for cached GL bindings, including invalidation when a pass allocates
 
 1. Create and make current the window's OpenGL context.
 2. Construct `SceneRenderer`, textures, meshes, and models on that thread.
-3. Keep referenced textures, meshes, and models alive and unmoved while their scene commands are used.
+3. Keep referenced textures, meshes, models and evaluated poses alive and unmoved while their scene commands are used.
 4. Destroy GPU resources while their context is current, before destroying the window.
 
 The game's facade declares its window first, so destruction automatically occurs in the required reverse order.
@@ -72,7 +72,8 @@ The provided `Window` performs that initialization and requests a core OpenGL 3.
 The renderer controls GL state during a frame. It renders to framebuffer zero and returns with depth testing and
 alpha blending enabled, depth writes enabled, polygon offset disabled, the default framebuffer bound,
 texture unit zero active, and no shader program, VAO, or sampler on units zero through thirteen bound. Multisampling is enabled;
-alpha-to-coverage, sample coverage, and sample masking are disabled. It does not preserve arbitrary caller GL state.
+alpha-to-coverage, sample coverage, and sample masking are disabled. Skinning uses uniform-buffer binding zero and
+unbinds it at frame completion. It does not preserve arbitrary caller GL state.
 Applications with an additional UI/rendering pass should set that pass's state explicitly.
 
 Matrices use column-major storage and column vectors. Camera FOV is in degrees; rotation functions use radians.
@@ -103,7 +104,7 @@ the base remains on the sidewalk while the arm points over the road. Benches and
 Road and sidewalk maps give each source texel its own roughness and reflectivity: paint is smoother than asphalt, tar and
 dirt are duller, and brighter aggregate catches more light. Concrete stays mostly rough, with restrained stone glints.
 Brick and roof maps separate mortar, masonry and dirt. Curbs use roughness 0.94, surrounding ground uses mapped concrete,
-and the blue player uses a 0.45 plastic finish. Model props retain their authored roughness/metallic factors: bench wood is
+and the cat player retains its authored gray dielectric finish. Model props retain their authored roughness/metallic factors: bench wood is
 rough and dielectric, its supports are smooth metal, and cones/barriers retain their separate plastic/rubber finishes.
 Textured props add local finish variation and use their authored normal maps where available.
 
@@ -431,13 +432,13 @@ and receivers. `RenderSettings` chooses shadow-map resolution, retro resolution,
 The camera and lighting data belong to each scene; the render target determines its projection aspect ratio and texture LOD.
 
 `Renderer::renderMenu()` uses a cached copy of the opening `WorldScene` at player X, road scroll and world time zero.
-Its scene commands borrow the same persistent game assets as gameplay. Only `MenuOverlay::time` advances for the selection
-pulse; clouds, lighting, heat distortion and scenery remain frozen. The application does not advance the simulation while
-the menu is open, and Play resets the game before starting it.
-`SceneRenderer` composites `Scene::menu` onto the completed camera image after geometry, effects and retro/lens
-presentation. Transparent pixels preserve the game view; outlined bitmap text and a translucent selection panel keep the
-options readable. The overlay fits the same content rectangle as the scene, including console letterboxing, and never
-writes scene depth.
+Its scene commands borrow the same persistent game assets as gameplay. The menu camera sits close to the ground and looks
+up the street, with the cat turned toward the camera on the left. A tilted sign with raised 3D lettering sits to its right.
+The menu owns a separate cat pose that glances at the sign and taps one foot; clouds, lighting, heat distortion and
+scenery remain frozen. The application does not advance the simulation while the menu is open. Play resets the game and
+returns to the regular chase camera before simulation starts. The reusable `Scene::menu` screen overlay remains available
+for other scenes; it composites after geometry, effects and retro/lens presentation, fits the content rectangle, and
+never writes scene depth.
 
 Shaders in `shaders/` are embedded by `cmake/EmbedShaders.cmake`. Editing a shader triggers regeneration on the next build,
 and running binaries do not depend on shader files or the working directory. Shared shadow sampling is in `lighting.glsl`;
@@ -614,10 +615,41 @@ UV sets are rejected. It centers X/Z, grounds Y,
 and normalizes to the requested height. Missing normals are generated from triangle geometry. Accessor sizes, byte ranges, layouts, indices, and node cycles are checked before use.
 Errors are reported as exceptions rather than dereferencing missing or out-of-range data.
 
-GLB containers, embedded/data-URI buffers/images, multiple buffers, sparse accessors, compressed meshes, animations,
-skinning, extra UV sets, other PBR extensions/blended alpha materials are not implemented.
+Skins retain their named node hierarchy, inverse bind matrices, `JOINTS_0` unsigned byte/short indices and four
+`WEIGHTS_0` influences (FLOAT or normalized unsigned byte/short). Weights are checked and normalized; missing joints,
+invalid skin references, unsupported additional influence sets and malformed inverse bind matrices are rejected.
+The mesh-node transform is ignored for skinned geometry as specified by [glTF skinning](https://github.khronos.org/glTF-Tutorials/gltfTutorial/gltfTutorial_020_Skins.html).
+Normalization accounts for the bind-pose bounds and applies equally to vertices and joint palettes.
+
+GLB containers, embedded/data-URI buffers/images, multiple buffers, sparse accessors, compressed meshes, authored
+animation-clip import/playback, extra UV sets, other PBR extensions/blended alpha materials are not implemented.
 Add a format adapter producing `assets::ModelData` to extend import without changing GPU ownership or scene submission.
 The bundled model licenses remain with their original files.
+
+## Skeletal poses and the player
+
+`assets::ModelPose` borrows immutable `ModelData` and needs no graphics context. Change its local node matrices with
+`setLocal()`, then call `evaluate()` before submitting the frame. Evaluation computes node transforms, normalized
+joint palettes, rigid mesh attachments and exact posed bounds using reusable storage. Each instance can have its own
+pose while sharing the original model's geometry. `Model` retains animation data for rigged imports and exposes
+`animationData()` and a default `bindPose()`; static props keep their original eight-float vertex layout.
+`ModelInstance::pose` optionally borrows an evaluated pose belonging to that model. Keep the pose unchanged until
+`render()` returns. Its bounds drive camera, shadow and reflection culling. Skinned meshes add four joint indices and
+four weights to the GPU vertex layout. The material, legacy model and shadow shaders share `skinning.glsl` and a
+128-matrix uniform buffer, with the capacity supplied from `kMaxSkinJoints`. The renderer reuses the current palette
+across passes and does not re-upload geometry or evaluate the gait separately for reflected views.
+
+The game's `PlayerCharacter` maps the `gato.gltf` rig's arms, legs, head and tail separately from the engine. The asset
+contains no animation clips, so its run is procedural: alternating arm/leg swings, wrist and knee motion, head
+counter-movement, a curved swaying tail and body bounce. The export's separate, unweighted ear mesh attaches to the
+head while preserving its bind transform. The glTF references the accompanying `gato.bin` buffer and `gato.png` color
+atlas in the same folder.
+The cat faces down the road at `kPlayerZ`; a body anchor keeps its collision position independent of the tail's length.
+Posed feet stay above the road, lane changes smoothly turn and bank the body, and the opening menu uses a separate idle pose.
+Game over holds the last running pose, including when presentation interpolation is removed; restart resets it.
+The renderer facade passes actual player speed and fixed-step remainder so cadence follows road movement smoothly.
+`kPlayerModelHeight`, `kPlayerRunStride`, `kPlayerRunBobHeight`, `kPlayerAnimationResponse` and the `kPlayerLane*Degrees`
+settings in `GameConfig.h` tune scale and motion. The simulation's collision rules remain independent of the visual rig.
 
 ## Migration from the original layout
 

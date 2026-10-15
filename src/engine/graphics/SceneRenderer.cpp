@@ -61,6 +61,7 @@ struct SceneRenderer::Impl {
     mutable detail::RenderState state;
     RenderSettings settings;
     detail::Programs programs;
+    mutable detail::SkinningBuffer skinning;
     Mesh cube = makeCubeMesh();
     Mesh quad = makeQuadMesh();
     Mesh affineQuad2 = subdividedQuad(2);
@@ -318,6 +319,7 @@ struct SceneRenderer::Impl {
         state.uniform1i(p.vertexLighting, mode != RenderMode::Normal);
         state.uniform1f(p.time, scene.time);
         state.uniform1i(p.quad, quadSurface);
+        state.uniform1i(p.skin.enabled, false);
         state.uniform1i(p.colorIsLinear, modelSurface);
         if (!quadSurface) {
             state.uniform1i(p.psxMinification, false);
@@ -346,6 +348,7 @@ struct SceneRenderer::Impl {
         const auto& p = programs.shadow;
         state.bindProgram(p.shader.id());
         matrix(p.mvp, multiply(lightProjection, model));
+        state.uniform1i(p.skin.enabled, false);
         state.uniform1i(p.textured, textureId != 0);
         state.uniform1f(p.opacity, opacity);
         state.uniform1f(p.alphaCutoff, alphaCutoff);
@@ -368,14 +371,29 @@ struct SceneRenderer::Impl {
         shadowDraw(command.model);
         cube.draw();
     }
+    void usePose(const detail::SkinningUniforms& uniforms, const assets::ModelPose* pose, std::size_t primitive) const {
+        const bool skinned = pose && !pose->jointMatrices(primitive).empty();
+        state.uniform1i(uniforms.enabled, skinned);
+        if (skinned)
+            skinning.bind(*pose, primitive);
+    }
+    static Mat4 posedTransform(const ModelInstance& command, const assets::ModelPose* pose, std::size_t primitive) {
+        return pose && pose->jointMatrices(primitive).empty()
+                   ? multiply(command.transform, pose->primitiveTransform(primitive))
+                   : command.transform;
+    }
     void cast(const ModelInstance& command) const {
         if (!command.model) {
             return;
         }
-        for (const auto& primitive : command.model->primitives()) {
+        const auto* pose = command.pose ? command.pose : command.model->bindPose();
+        const auto& primitives = command.model->primitives();
+        for (std::size_t i = 0; i < primitives.size(); ++i) {
+            const auto& primitive = primitives[i];
             const auto& material = primitive.material;
-            shadowDraw(command.transform, material.alphaCutoff > 0 ? material.texture.id() : 0, 1, material.alphaCutoff,
-                       true, {1, 1}, {}, material.baseColor[3]);
+            shadowDraw(posedTransform(command, pose, i), material.alphaCutoff > 0 ? material.texture.id() : 0, 1,
+                       material.alphaCutoff, true, {1, 1}, {}, material.baseColor[3]);
+            usePose(programs.shadow.skin, pose, i);
             primitive.mesh.draw();
         }
     }
@@ -527,11 +545,17 @@ struct SceneRenderer::Impl {
         if (!command.model) {
             return;
         }
+        const auto* pose = command.pose ? command.pose : command.model->bindPose();
+        const auto& primitives = command.model->primitives();
         if (command.pbrSurface) {
             const auto& p = programs.material;
             beginMaterial(command.transform, scene, SurfaceMaterial{}, false, true);
             state.uniform1f(p.affine, affineStrength(settings.modelAffineStrength));
-            for (const auto& primitive : command.model->primitives()) {
+            for (std::size_t i = 0; i < primitives.size(); ++i) {
+                const auto& primitive = primitives[i];
+                if (pose)
+                    lit(p, posedTransform(command, pose, i), scene);
+                usePose(p.skin, pose, i);
                 const auto& material = primitive.material;
                 materialFinish(p, command.materialOverride.value_or(material.surfaceMaterial));
                 materialMaps(p, material.textures());
@@ -561,7 +585,11 @@ struct SceneRenderer::Impl {
         sunlight(p, scene.light);
         state.uniform1i(p.vertexLighting, mode != RenderMode::Normal);
         state.uniform1f(p.affine, affineStrength(settings.modelAffineStrength));
-        for (const auto& primitive : command.model->primitives()) {
+        for (std::size_t i = 0; i < primitives.size(); ++i) {
+            const auto& primitive = primitives[i];
+            if (pose)
+                lit(p, posedTransform(command, pose, i), scene);
+            usePose(p.skin, pose, i);
             const auto& material = primitive.material;
             state.uniform1f(p.hasTexture, material.texture.id() != 0);
             state.uniform1f(p.alphaCutoff, material.alphaCutoff);
@@ -939,6 +967,7 @@ struct SceneRenderer::Impl {
         lightProjection = scene.light.viewProjection();
         visibility.prepare(scene);
         lighting.prepare(scene);
+        skinning.beginFrame();
         visibility.setView(lightProjection);
 
         glDisable(GL_SCISSOR_TEST);
@@ -1052,6 +1081,7 @@ struct SceneRenderer::Impl {
         menu(scene.menu, drawable);
         state.activeTexture(GL_TEXTURE0);
         state.bindTexture(GL_TEXTURE_2D, 0);
+        skinning.finishFrame();
         glBindVertexArray(0);
         state.bindSampler(0, 0);
         state.bindSampler(2, 0);

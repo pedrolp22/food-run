@@ -1,11 +1,28 @@
 #pragma once
 
+#include "engine/math/Math.h"
 #include <array>
 #include <filesystem>
+#include <string>
 #include <vector>
 
 namespace engine::assets {
-inline constexpr int kModelVertexStride = 8; // Position xyz, normal xyz, UV xy.
+inline constexpr int kModelVertexStride = 8;       // Position xyz, normal xyz, UV xy.
+inline constexpr std::size_t kMaxSkinJoints = 128; // Fits the minimum OpenGL uniform-block size.
+struct SkinInfluence {
+    std::array<unsigned int, 4> joints{};
+    std::array<float, 4> weights{};
+};
+struct RigNode {
+    std::string name;
+    int parent = -1;
+    math::Mat4 localBind = math::identity();
+    math::Mat4 worldBind = math::identity();
+};
+struct SkinData {
+    std::vector<int> joints;
+    std::vector<math::Mat4> inverseBindMatrices;
+};
 struct MaterialData {
     std::array<float, 4> baseColor = {1, 1, 1, 1}; // Linear glTF baseColorFactor, not sRGB.
     std::filesystem::path baseTexture;
@@ -29,11 +46,19 @@ struct PrimitiveData {
     std::vector<float> vertices;
     std::vector<unsigned int> indices;
     MaterialData material;
+    int node = -1;
+    int skin = -1;
+    std::vector<SkinInfluence> influences;
 };
 struct ModelData {
     std::vector<PrimitiveData> primitives;
+    std::vector<RigNode> nodes;
+    std::vector<int> nodeOrder; // Parents before children, independent of glTF node indices.
+    std::vector<SkinData> skins;
+    math::Mat4 normalization = math::identity();
+    math::Mat4 denormalization = math::identity();
 };
-// CPU-only import. Supports external-buffer glTF triangles and UV0 base-color, material and normal maps.
+// CPU-only import. Supports external-buffer glTF triangles, four-weight skins and UV0 material maps.
 // Centers X/Z and grounds Y, preserving proportions at the requested height. Throws on invalid input.
 ModelData loadGltf(const std::filesystem::path& path, float targetHeight = 1.0f);
 } // namespace engine::assets

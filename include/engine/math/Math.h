@@ -29,6 +29,8 @@ Mat4 translation(const Vec3& position);
 Mat4 scale(const Vec3& size);
 Mat4 rotateX(float angleRadians);
 Mat4 rotateY(float angleRadians);
+Mat4 rotation(Vec3 axis, float angleRadians);
+Mat4 inverseAffine(const Mat4& matrix);
 Mat4 perspective(float fovRadians, float aspectRatio, float nearPlane, float farPlane);
 Mat4 lookAt(const Vec3& eye, const Vec3& center, const Vec3& up);
 Vec3 transformPoint(const Mat4& m, const Vec3& p);

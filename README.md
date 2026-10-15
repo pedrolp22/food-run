@@ -2,8 +2,14 @@
 
 A C++20 lane runner with directional lighting, geometry shadows, and an optional retro renderer.
 
-The main menu overlays its pixel-font options on a frozen view of the opening game scene. The world remains still
-while browsing the menu; choosing Play starts the simulation.
+The main menu places the cat and a tilted, 3D-lettered sign in a low, upward-looking street view. The impatient cat taps
+one foot while browsing; the world remains still. Choosing Play restores the normal chase view and starts the simulation.
+
+The player is the textured, rigged cat from `assets/models/gato/gato.gltf`, with a procedural run driven by movement
+speed, alternating arm and leg swings, wrist and knee motion, a swaying tail, torso follow-through and lane-change lean.
+Shadows and window reflections use the same animated pose. The menu uses a separate impatient idle; game over freezes
+the run, and restart resets it.
+The `kPlayer*` animation settings in `GameConfig.h` control height, cadence and lean.
 
 ## Build and run
 
@@ -181,7 +187,7 @@ See [architecture and extension guide](docs/architecture.md) for ownership, rend
 ## Tests and examples
 
 CPU tests cover transform math, curved segment continuity, fixed timestep behavior, collisions,
-seeded simulation, real model imports, malformed assets, and sprite contour geometry. They run without a display or SDL:
+seeded simulation, real model imports, skin hierarchy/weights/inverse bind matrices, malformed assets, and sprite contour geometry. They run without a display or SDL:
 
 ```sh
 cmake -S . -B build/headless -DSUBWAY_BUILD_GRAPHICS=OFF -DSUBWAY_BUILD_PLATFORM=OFF -DSUBWAY_BUILD_GAME=OFF
@@ -197,6 +203,7 @@ Gouraud shading, affine subdivision, lens curvature/menu isolation, transparent 
 building/street material roughness/Fresnel/metallic response, texture-aligned surface masks, normal-map light response,
 material-state isolation, texture-defined facade/glass finishes, glTF color/factor/map handling, sun color and shadowing,
 live world reflections of moving geometry, reflection blur/toggles and cubemap resource lifetimes, actual street bump response,
+player gait/lane changes/freeze/restart, rigid ear attachments, independent skeletal poses and animated shadow/reflection geometry,
 collectible rotation and visibility through a full turn, contour ripple motion/fading/occlusion,
 immediate collection pops with matching poses and smooth fading after game over,
 and the application loop with lane changes, restart, retro toggling, and exit:

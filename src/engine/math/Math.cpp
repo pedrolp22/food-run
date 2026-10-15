@@ -1,5 +1,6 @@
 #include "engine/math/Math.h"
 #include <cmath>
+#include <stdexcept>
 
 namespace engine::math {
 
@@ -90,6 +91,55 @@ Mat4 rotateY(float angleRadians) {
     result.values[2] = -sine;
     result.values[8] = sine;
     result.values[10] = cosine;
+    return result;
+}
+
+Mat4 rotation(Vec3 axis, float angleRadians) {
+    if (!std::isfinite(dot(axis, axis)) || dot(axis, axis) < .00000001f || !std::isfinite(angleRadians)) {
+        throw std::invalid_argument("Invalid rotation axis or angle");
+    }
+    axis = normalize(axis);
+    const float c = std::cos(angleRadians), s = std::sin(angleRadians), t = 1 - c;
+    const float x = axis.x, y = axis.y, z = axis.z;
+    Mat4 result = identity();
+    result.values[0] = t * x * x + c;
+    result.values[1] = t * x * y + s * z;
+    result.values[2] = t * x * z - s * y;
+    result.values[4] = t * x * y - s * z;
+    result.values[5] = t * y * y + c;
+    result.values[6] = t * y * z + s * x;
+    result.values[8] = t * x * z + s * y;
+    result.values[9] = t * y * z - s * x;
+    result.values[10] = t * z * z + c;
+    return result;
+}
+
+Mat4 inverseAffine(const Mat4& matrix) {
+    const auto& m = matrix.values;
+    const double a = m[0], b = m[4], c = m[8], d = m[1], e = m[5], f = m[9], g = m[2], h = m[6], i = m[10];
+    const double determinant = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+    if (!std::isfinite(determinant) || determinant == 0 || m[3] != 0 || m[7] != 0 || m[11] != 0 || m[15] != 1) {
+        throw std::invalid_argument("Cannot invert a singular or non-affine transform");
+    }
+    Mat4 result = identity();
+    auto& out = result.values;
+    out[0] = (e * i - f * h) / determinant;
+    out[4] = (c * h - b * i) / determinant;
+    out[8] = (b * f - c * e) / determinant;
+    out[1] = (f * g - d * i) / determinant;
+    out[5] = (a * i - c * g) / determinant;
+    out[9] = (c * d - a * f) / determinant;
+    out[2] = (d * h - e * g) / determinant;
+    out[6] = (b * g - a * h) / determinant;
+    out[10] = (a * e - b * d) / determinant;
+    const auto position = transformPoint(result, {-m[12], -m[13], -m[14]});
+    out[12] = position.x;
+    out[13] = position.y;
+    out[14] = position.z;
+    for (float value : out) {
+        if (!std::isfinite(value))
+            throw std::invalid_argument("Non-finite inverse transform");
+    }
     return result;
 }
 

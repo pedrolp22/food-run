@@ -8,6 +8,10 @@ uniform vec2 uTexScale;
 uniform vec2 uTexOffset;
 out vec2 vUv;
 void main() {
-    gl_Position = uMvp * vec4(aPosition, 1.0);
+    vec4 position = vec4(aPosition, 1.0);
+#ifdef MODEL_MAX_SKIN_JOINTS
+    if (uSkinned) position = skinMatrix() * position;
+#endif
+    gl_Position = uMvp * position;
     vUv = (uModelMesh ? aModelUv : aQuadUv.xy) * uTexScale + uTexOffset;
 }

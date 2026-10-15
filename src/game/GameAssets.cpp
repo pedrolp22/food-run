@@ -1,5 +1,6 @@
 #include "game/GameAssets.h"
 #include "GameConfig.h"
+#include "game/PlayerCharacter.h"
 
 namespace game {
 using namespace engine::graphics;
@@ -12,7 +13,7 @@ struct TextureSpec {
 };
 struct ModelSpec {
     ModelId id;
-    const char* directory;
+    const char* file;
     float height;
 };
 constexpr std::array textures = {
@@ -39,10 +40,13 @@ constexpr std::array textures = {
     TextureSpec{TextureId::Fence, "textures/grassy/spikedfence_decor.png", true, true},
     TextureSpec{TextureId::Leaf, "textures/grassy/leaf.png", false, true},
     TextureSpec{TextureId::Moon, "textures/sky/moon.png", false}};
-constexpr std::array models = {
-    ModelSpec{ModelId::Cone, "traffic_cone", 1.0f},   ModelSpec{ModelId::Barrier, "barrier", 0.9f},
-    ModelSpec{ModelId::TrashCan, "trash_can", 0.75f}, ModelSpec{ModelId::Bench, "bench", 0.7f},
-    ModelSpec{ModelId::Tree, "tree", 1.0f},           ModelSpec{ModelId::StreetLamp, "street_lamp", 1.0f}};
+constexpr std::array models = {ModelSpec{ModelId::Cone, "traffic_cone/scene.gltf", 1.0f},
+                               ModelSpec{ModelId::Barrier, "barrier/scene.gltf", 0.9f},
+                               ModelSpec{ModelId::TrashCan, "trash_can/scene.gltf", 0.75f},
+                               ModelSpec{ModelId::Bench, "bench/scene.gltf", 0.7f},
+                               ModelSpec{ModelId::Tree, "tree/scene.gltf", 1.0f},
+                               ModelSpec{ModelId::StreetLamp, "street_lamp/scene.gltf", 1.0f},
+                               ModelSpec{ModelId::PlayerCat, "gato/gato.gltf", GameConfig::kPlayerModelHeight}};
 static_assert(textures.size() == static_cast<std::size_t>(TextureId::Count));
 static_assert(models.size() == static_cast<std::size_t>(ModelId::Count));
 TextureId collectibleTexture(const Entity& entity) {
@@ -80,7 +84,9 @@ GameAssets::GameAssets(const std::filesystem::path& root, bool mipmapped) {
         }
     }
     for (const auto& asset : models) {
-        auto data = engine::assets::loadGltf(root / "models" / asset.directory / "scene.gltf", asset.height);
+        auto data = engine::assets::loadGltf(root / "models" / asset.file, asset.height);
+        if (asset.id == ModelId::PlayerCat)
+            preparePlayerModel(data);
         for (auto& primitive : data.primitives) {
             auto& material = primitive.material;
             // The game's companions supplement assets that have no authored surface maps.

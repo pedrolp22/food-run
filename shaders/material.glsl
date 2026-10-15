@@ -81,7 +81,8 @@ vec3 materialRadianceEnvironment(MaterialBrdf material, vec3 normal, vec3 worldP
                      diffuseEnvironment(normal) * occlusion;
     indirect += environment * material.environmentWeight *
                  specularOcclusion(material.noV, occlusion, material.roughness);
-    indirect *= clamp(shade.x, 0.0, 1.0) * 2.0 * ditheredShadowAmbient(visibility, noL);
+    indirect *= clamp(shade.x, 0.0, 1.0) * 2.0 * ditheredShadowAmbient(visibility, noL) *
+                ambientOcclusionVisibility(visibility);
     vec3 local = vec3(0.0);
     for (int i = 0; i < uPointLightCount; ++i) {
         vec3 delta = uPointLightPositionRadius[i].xyz - worldPosition;
