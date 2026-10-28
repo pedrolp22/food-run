@@ -536,10 +536,18 @@ struct PresentationProgram {
     int texture;
     int lensStrength;
     int lensAspect;
+    int aoDepth;
+    int aoEnabled;
+    int aoCamera;
+    int aoParameters;
     PresentationProgram(std::string_view fragment, const char* name)
-        : shader(shaders::retro_vert, fragment, name, shaders::lens_glsl), scale(shader.uniform("uScale")),
+        : shader(shaders::retro_vert, fragment, name,
+                 std::string(shaders::lens_glsl) + std::string(shaders::ambient_occlusion_glsl)),
+          scale(shader.uniform("uScale")),
           texture(shader.uniform("uTexture")), lensStrength(shader.uniform("uLensStrength")),
-          lensAspect(shader.uniform("uLensAspect")) {}
+          lensAspect(shader.uniform("uLensAspect")), aoDepth(shader.uniform("uAoDepth")),
+          aoEnabled(shader.uniform("uAoEnabled")), aoCamera(shader.uniform("uAoCamera")),
+          aoParameters(shader.uniform("uAoParameters")) {}
 };
 
 struct RetroProgram : PresentationProgram {

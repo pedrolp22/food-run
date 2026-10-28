@@ -27,7 +27,8 @@ class Renderer {
     void toggleDistanceFog() const;
     bool distanceFog() const;
     engine::graphics::RenderMode renderMode() const;
-    void renderMenu(float time, int selection) const;
+    int menuHitTest(int x, int y) const;
+    void renderMenu(float time, int selection, int pressed = -1) const;
     void render(float playerX, float roadScroll, float gameTime, int score, std::span<const Entity> entities,
                 std::span<const CollectEffect> collectEffects, float effectRemainder = 0, float nightBlend = 0,
                 float playerSpeed = 0, float cameraBlend = 1) const;

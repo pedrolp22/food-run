@@ -20,13 +20,18 @@ RenderTarget::RenderTarget(Size size, Kind kind, int samples) : size_(size) {
     glGenFramebuffers(1, &fbo_);
     glGenTextures(1, &texture_);
     if (kind != Kind::Shadow) {
-        glGenRenderbuffers(1, &depth_);
+        if (samples_ == 1 && kind != Kind::Reflection) {
+            glGenTextures(1, &depthTexture_);
+        } else {
+            glGenRenderbuffers(1, &depth_);
+        }
     }
     if (samples_ > 1) {
         glGenFramebuffers(1, &resolveFbo_);
         glGenRenderbuffers(1, &colorBuffer_);
     }
-    if (!fbo_ || !texture_ || (kind != Kind::Shadow && !depth_) || (samples_ > 1 && (!resolveFbo_ || !colorBuffer_))) {
+    if (!fbo_ || !texture_ || (kind != Kind::Shadow && !depth_ && !depthTexture_) ||
+        (samples_ > 1 && (!resolveFbo_ || !colorBuffer_))) {
         release();
         throw std::runtime_error("Could not allocate render target");
     }
@@ -81,6 +86,16 @@ RenderTarget::RenderTarget(Size size, Kind kind, int samples) : size_(size) {
     if (shadow) {
         glDrawBuffer(GL_NONE);
         glReadBuffer(GL_NONE);
+    } else if (depthTexture_) {
+        glBindTexture(GL_TEXTURE_2D, depthTexture_);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, size.width, size.height, 0, GL_DEPTH_COMPONENT,
+                     GL_UNSIGNED_INT, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, depthTexture_, 0);
+        glBindTexture(GL_TEXTURE_2D, 0);
     } else {
         glBindRenderbuffer(GL_RENDERBUFFER, depth_);
         if (samples_ > 1) {
@@ -110,6 +125,7 @@ RenderTarget& RenderTarget::operator=(RenderTarget&& other) noexcept {
         fbo_ = std::exchange(other.fbo_, 0);
         texture_ = std::exchange(other.texture_, 0);
         depth_ = std::exchange(other.depth_, 0);
+        depthTexture_ = std::exchange(other.depthTexture_, 0);
         resolveFbo_ = std::exchange(other.resolveFbo_, 0);
         colorBuffer_ = std::exchange(other.colorBuffer_, 0);
         samples_ = std::exchange(other.samples_, 1);
@@ -127,13 +143,16 @@ void RenderTarget::release() {
     if (depth_) {
         glDeleteRenderbuffers(1, &depth_);
     }
+    if (depthTexture_) {
+        glDeleteTextures(1, &depthTexture_);
+    }
     if (resolveFbo_) {
         glDeleteFramebuffers(1, &resolveFbo_);
     }
     if (colorBuffer_) {
         glDeleteRenderbuffers(1, &colorBuffer_);
     }
-    fbo_ = texture_ = depth_ = resolveFbo_ = colorBuffer_ = 0;
+    fbo_ = texture_ = depth_ = depthTexture_ = resolveFbo_ = colorBuffer_ = 0;
 }
 void RenderTarget::bind() const {
     glBindFramebuffer(GL_FRAMEBUFFER, fbo_);

@@ -11,6 +11,8 @@
 #include <unordered_map>
 
 namespace game {
+// The menu and the first transition frame must use the same aspect-dependent camera.
+engine::graphics::Camera menuCamera(float aspect);
 // Builds game scenery once per frame. It never issues GL calls or owns a graphics context.
 class WorldScene {
   public:
@@ -18,7 +20,7 @@ class WorldScene {
     const engine::graphics::Scene& build(float playerX, float roadScroll, float gameTime,
                                          std::span<const Entity> entities, std::span<const CollectEffect> effects,
                                          float effectRemainder = 0, float nightBlend = 0, float playerSpeed = 0,
-                                         float cameraBlend = 1);
+                                         float cameraBlend = 1, float aspect = 1);
 
   private:
     enum class Face { FrontBack, Side, Top };

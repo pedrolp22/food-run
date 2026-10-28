@@ -62,11 +62,21 @@ float ditheredShadowAmbient(float visibility, float diffuse) {
     return uDitheredShadows ? 1.0 - uDitheredShadowDarkness * (1.0 - visibility) * facing : 1.0;
 }
 
-float ambientOcclusionVisibility(float visibility) {
+float ambientOcclusionVisibility(float visibility, float diffuse) {
     // Let the existing scene-wide shadow map occlude part of the sky/ambient
     // fill as well as direct sunlight. Keeping this softer than direct shadow
     // visibility grounds every receiver without adding another render pass.
-    return uDitheredShadows ? 1.0 : mix(1.0, clamp(visibility, 0.0, 1.0), 0.42);
+    float strength = 0.42;
+    if (uDitheredShadows) {
+        // Match the shadow mesh's own pixel mask: the untouched pixels remain
+        // fully lit, and sun-away faces do not acquire a checkerboard.
+        ivec2 pixel = ivec2(floor(gl_FragCoord.xy));
+        if (((pixel.x ^ pixel.y) & 1) != 0) {
+            return 1.0;
+        }
+        strength *= smoothstep(0.0, 0.1, diffuse);
+    }
+    return mix(1.0, clamp(visibility, 0.0, 1.0), strength);
 }
 
 float sunVisibility(float diffuse) {

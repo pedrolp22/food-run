@@ -929,7 +929,8 @@ struct SceneRenderer::Impl {
         glEnable(GL_DEPTH_TEST);
     }
     template <class Program>
-    void present(Size drawable, const Program& p, unsigned int source, float lensStrength) const {
+    void present(Size drawable, const Program& p, unsigned int source, unsigned int depthTexture,
+                 const Camera& camera, float lensStrength) const {
         state.bindSampler(0, 0);
         RenderTarget::bindDefault(drawable);
         glClearColor(0, 0, 0, 1);
@@ -943,8 +944,15 @@ struct SceneRenderer::Impl {
                         renderSize.height * fit / drawable.height * 2);
         state.uniform1f(p.lensStrength, lensStrength);
         state.uniform1f(p.lensAspect, static_cast<float>(renderSize.width) / renderSize.height);
+        state.uniform1i(p.aoEnabled, settings.screenSpaceAmbientOcclusion && depthTexture != 0);
+        state.uniform3f(p.aoCamera, camera.nearPlane, camera.farPlane,
+                        std::tan(radians(camera.verticalFov) * 0.5f));
+        state.uniform3f(p.aoParameters, settings.ambientOcclusionRadius, settings.ambientOcclusionStrength,
+                        settings.ambientOcclusionBias);
         texture(p.texture, source);
+        texture(p.aoDepth, depthTexture, 1);
         quad.draw();
+        state.bindSampler(1, 0);
         glEnable(GL_DEPTH_TEST);
         glEnable(GL_BLEND);
     }
@@ -957,7 +965,7 @@ struct SceneRenderer::Impl {
         }
         const float lensStrength =
             !std::isfinite(scene.camera.fisheyeStrength) ? 0.0f : std::clamp(scene.camera.fisheyeStrength, 0.0f, 0.25f);
-        const bool cameraPass = mode == RenderMode::Normal && lensStrength > 0;
+        const bool cameraPass = mode == RenderMode::Normal && (lensStrength > 0 || settings.screenSpaceAmbientOcclusion);
         if (cameraPass && (!cameraTarget || cameraTarget->size().width != drawable.width ||
                            cameraTarget->size().height != drawable.height)) {
             cameraTarget = std::make_unique<RenderTarget>(drawable, RenderTarget::Kind::ColorDepth);
@@ -1073,9 +1081,10 @@ struct SceneRenderer::Impl {
         if (psx()) {
             state.bindProgram(programs.retro.shader.id());
             state.uniform1f(programs.retro.ditherStrength, settings.retroDitherStrength);
-            present(drawable, programs.retro, retro.texture(), lensStrength);
+            present(drawable, programs.retro, retro.texture(), retro.depthTexture(), scene.camera, lensStrength);
         } else if (cameraPass) {
-            present(drawable, programs.present, cameraTarget->texture(), lensStrength);
+            present(drawable, programs.present, cameraTarget->texture(), cameraTarget->depthTexture(), scene.camera,
+                    lensStrength);
         }
         // Composite UI over the completed game image, after retro/lens effects.
         menu(scene.menu, drawable);

@@ -44,5 +44,10 @@ void RenderSettings::validate() const {
     if (!std::isfinite(psxDitheredShadowDarkness) || psxDitheredShadowDarkness < 0 || psxDitheredShadowDarkness > 1) {
         throw std::invalid_argument("Dithered shadow darkness must be in [0, 1]");
     }
+    if (!std::isfinite(ambientOcclusionRadius) || ambientOcclusionRadius < 0.05f || ambientOcclusionRadius > 2.0f ||
+        !std::isfinite(ambientOcclusionStrength) || ambientOcclusionStrength < 0 || ambientOcclusionStrength > 3 ||
+        !std::isfinite(ambientOcclusionBias) || ambientOcclusionBias < 0 || ambientOcclusionBias > 0.25f) {
+        throw std::invalid_argument("Ambient occlusion radius, strength or bias is outside its supported range");
+    }
 }
 } // namespace engine::graphics

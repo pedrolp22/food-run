@@ -19,6 +19,7 @@ GLAD and stb_image are included. No dependencies are downloaded during configura
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel
+cmake --build build --target cook_textures
 ./build/subway
 ctest --test-dir build --output-on-failure
 ```
@@ -139,6 +140,9 @@ Material data is stored in `assets/materials/` and beside the textured props. To
 texture palettes, run `python3 scripts/generate_material_maps.py` with Pillow installed; the game and build use the
 checked-in PNGs and do not require Python. Map channels and reusable material bindings are described in the
 [rendering contracts](docs/architecture.md#rendering-contracts).
+`cook_textures` writes engine-ready RGBA mip chains into ignored `.cooked/` folders beside the source images. The loader
+uses a cooked chain when its source timestamp and size still match, skipping PNG decoding and runtime mip generation;
+otherwise it falls back to the source image. Re-run the target after changing textures or generated material maps.
 To regenerate only the skyscraper maps, run:
 
 ```sh

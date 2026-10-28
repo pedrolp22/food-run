@@ -42,6 +42,9 @@ void main() {
     ivec2 size = textureSize(uTexture, 0);
     ivec2 pixel = clamp(ivec2(lensUv(vTexCoord) * vec2(size)), ivec2(0), size - 1);
     vec4 frame = texelFetch(uTexture, pixel, 0);
+    if (frame.a > 0.0) {
+        frame.rgb *= screenSpaceAmbientVisibility((vec2(pixel) + 0.5) / vec2(size));
+    }
     vec3 rgb8 = floor(frame.rgb * 255.0 + 0.5);
     // Anchor dither to native, top-down framebuffer coordinates, before the
     // lens and enlargement. PS1 saturates 8-bit RGB + offset, then drops 3 bits.

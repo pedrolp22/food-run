@@ -57,6 +57,37 @@ const ModelInstance& cat(const Scene& scene, const game::GameAssets& assets) {
     CHECK(result && result->pose && result->pbrSurface);
     return *result;
 }
+void cameraTransitionChecks(const game::GameAssets& assets) {
+    game::WorldScene world(assets);
+    for (const float aspect : {9.0f / 16.0f, 16.0f / 9.0f}) {
+        const Camera menu = game::menuCamera(aspect);
+        const Camera start = world.build(0, 0, 0, {}, {}, 0, 0, 0, 0, aspect).camera;
+        CHECK(near(start.position.x, menu.position.x));
+        CHECK(near(start.position.y, menu.position.y));
+        CHECK(near(start.position.z, menu.position.z));
+        CHECK(near(start.target.x, menu.target.x));
+        CHECK(near(start.target.y, menu.target.y));
+        CHECK(near(start.target.z, menu.target.z));
+        CHECK(near(start.verticalFov, menu.verticalFov));
+        CHECK(near(start.fisheyeStrength, 0));
+        const auto projection = menu.viewProjection(aspect);
+        const Vec3 player{0, GameConfig::kPlayerModelHeight * .5f, GameConfig::kPlayerZ};
+        const float clipX = transformPoint(projection, player).x;
+        const float clipW = projection.values[3] * player.x + projection.values[7] * player.y +
+                            projection.values[11] * player.z + projection.values[15];
+        CHECK(clipX / clipW < -.2f && clipX / clipW > -.5f);
+        const Camera almostStart = world.build(0, 0, 0, {}, {}, 0, 0, 0, .01f, aspect).camera;
+        CHECK(std::abs(almostStart.position.x - start.position.x) < .001f);
+        const Camera end = world.build(0, 0, 0, {}, {}, 0, 0, 0, 1, aspect).camera;
+        CHECK(near(end.position.x, 0));
+        CHECK(near(end.position.y, GameConfig::kCameraHeight));
+        CHECK(near(end.position.z, GameConfig::kCameraZ));
+        CHECK(near(end.target.y, GameConfig::kCameraTargetHeight));
+        CHECK(near(end.target.z, GameConfig::kCameraTargetZ));
+        CHECK(near(end.verticalFov, GameConfig::kCameraVerticalFov));
+        CHECK(near(end.fisheyeStrength, GameConfig::kCameraFisheyeStrength));
+    }
+}
 void gaitChecks(const game::GameAssets& assets) {
     game::WorldScene world(assets);
     const auto& start = cat(world.build(0, 0, 0, {}, {}), assets);
@@ -89,6 +120,24 @@ void gaitChecks(const game::GameAssets& assets) {
     const auto& nextRun = cat(world.build(0, 37, 4, {}, {}, .01f, 0, 10), assets);
     CHECK(same(palette(*nextRun.pose), first));
     CHECK(nextRun.pose->boundsHalfExtent().y > .4f);
+}
+void menuPoseChecks(const game::GameAssets& assets) {
+    game::PlayerCharacter player(*assets.model(game::ModelId::PlayerCat).animationData());
+    player.updateMenu(0);
+    const auto initial = player.pose().boundsHalfExtent();
+    auto previous = initial;
+    for (int frame = 1; frame <= 160; ++frame) {
+        player.updateMenu(frame * .05f);
+        const auto bounds = player.pose().boundsHalfExtent();
+        // Idle motion should retain the model's proportions and avoid sudden limb jumps.
+        CHECK(std::abs(bounds.x - initial.x) < .08f);
+        CHECK(std::abs(bounds.y - initial.y) < .08f);
+        CHECK(std::abs(bounds.z - initial.z) < .08f);
+        CHECK(std::abs(bounds.x - previous.x) < .025f);
+        CHECK(std::abs(bounds.y - previous.y) < .025f);
+        CHECK(std::abs(bounds.z - previous.z) < .025f);
+        previous = bounds;
+    }
 }
 engine::assets::ModelData triangle() {
     engine::assets::ModelData data;
@@ -198,6 +247,8 @@ int main() {
     try {
         engine::platform::Window window({"Player animation tests", {192, 192}, false, false});
         game::GameAssets assets(TEST_ASSET_DIR, false);
+        cameraTransitionChecks(assets);
+        menuPoseChecks(assets);
         gaitChecks(assets);
         skinPassChecks(window.drawableSize());
         std::cout

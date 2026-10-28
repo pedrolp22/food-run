@@ -21,6 +21,7 @@ class RenderTarget {
     int maxMipLevel() const;
     static void bindDefault(Size size);
     unsigned int texture() const { return texture_; }
+    unsigned int depthTexture() const { return depthTexture_; }
     Size size() const { return size_; }
     int samples() const { return samples_; }
 
@@ -29,6 +30,7 @@ class RenderTarget {
     unsigned int fbo_ = 0;
     unsigned int texture_ = 0;
     unsigned int depth_ = 0;
+    unsigned int depthTexture_ = 0;
     unsigned int resolveFbo_ = 0;
     unsigned int colorBuffer_ = 0;
     int samples_ = 1;

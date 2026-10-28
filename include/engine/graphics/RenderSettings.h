@@ -15,6 +15,10 @@ struct RenderSettings {
     bool psxDitheredShadows = false; // Saturn-style shadow transparency, independent of RGB dithering.
     float psxDitheredShadowDarkness =
         .8f;                     // Suppress ambient/sky light in covered pixels, [0, 1]; holes stay fully lit.
+    bool screenSpaceAmbientOcclusion = true;
+    float ambientOcclusionRadius = .65f;   // View-space neighborhood size in world units.
+    float ambientOcclusionStrength = 1.35f; // Screen-space darkening, [0, 3].
+    float ambientOcclusionBias = .025f;    // Ignore small depth/normal reconstruction errors, in world units.
     bool psxDistanceFog = false; // Stored preference, applied only in PSX mode; the game enables it initially.
     float psxFogStart = 45;      // Nonnegative camera-space start distance; leave nearby action clear.
     float psxFogEnd = 125;       // Finite end distance greater than start.

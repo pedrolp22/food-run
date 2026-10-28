@@ -26,6 +26,10 @@ class Game {
     bool cameraTransitionActive_ = false;
     float cameraTransitionElapsed_ = 0;
     int menuSelection_ = 0;
+    int menuMouseDown_ = -1;
+    int menuMouseHover_ = -1;
+    int menuPendingActivation_ = -1;
+    float menuClickRemaining_ = 0;
     _SDL_GameController* controller_ = nullptr;
     float titleUpdateTimer_ = 0;
 };

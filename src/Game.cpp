@@ -21,6 +21,7 @@ int Game::run() {
     }
     running_ = true;
     auto previousFrame = Clock::now();
+    float menuTime = 0;
     while (running_) {
         const auto now = Clock::now();
         const float elapsed = std::chrono::duration<float>(now - previousFrame).count();
@@ -30,7 +31,20 @@ int Game::run() {
             break;
         }
         if (inMenu_) {
-            renderer_.renderMenu(std::chrono::duration<float>(now.time_since_epoch()).count(), menuSelection_);
+            menuTime += std::max(elapsed, 0.0f);
+            if (menuPendingActivation_ >= 0) {
+                menuClickRemaining_ -= std::max(elapsed, 0.0f);
+                if (menuClickRemaining_ <= 0) {
+                    menuSelection_ = menuPendingActivation_;
+                    menuPendingActivation_ = -1;
+                    menuMouseDown_ = -1;
+                    activateMenuSelection();
+                    if (!inMenu_ || !running_)
+                        continue;
+                }
+            }
+            renderer_.renderMenu(menuTime, menuSelection_,
+                                 menuMouseDown_ == menuMouseHover_ ? menuMouseDown_ : -1);
             continue;
         }
         float cameraBlend = 1;
@@ -66,6 +80,35 @@ void Game::handleEvents() {
             running_ = false;
             continue;
         }
+        if (inMenu_ && (event.type == SDL_MOUSEMOTION || event.type == SDL_MOUSEBUTTONDOWN ||
+                        event.type == SDL_MOUSEBUTTONUP)) {
+            if (menuPendingActivation_ >= 0)
+                continue;
+            if (event.type == SDL_MOUSEMOTION) {
+                const int hit = renderer_.menuHitTest(event.motion.x, event.motion.y);
+                menuMouseHover_ = hit;
+                if (hit >= 0)
+                    menuSelection_ = hit;
+            } else if (event.button.button == SDL_BUTTON_LEFT) {
+                const int hit = renderer_.menuHitTest(event.button.x, event.button.y);
+                menuMouseHover_ = hit;
+                if (event.type == SDL_MOUSEBUTTONDOWN) {
+                    menuMouseDown_ = hit;
+                    if (hit >= 0)
+                        menuSelection_ = hit;
+                } else {
+                    if (hit >= 0 && hit == menuMouseDown_) {
+                        menuPendingActivation_ = hit;
+                        menuClickRemaining_ = .14f;
+                    } else {
+                        menuMouseDown_ = -1;
+                    }
+                }
+            }
+            continue;
+        }
+        if (inMenu_ && menuPendingActivation_ >= 0)
+            continue;
         if (event.type != SDL_KEYDOWN || event.key.repeat) {
             if (inMenu_ && event.type == SDL_CONTROLLERBUTTONDOWN) {
                 switch (event.cbutton.button) {

@@ -4,8 +4,10 @@
 #include "engine/graphics/SceneRenderer.h"
 #include "engine/platform/Window.h"
 #include "game/WorldScene.h"
+#include <SDL2/SDL.h>
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <iostream>
 #include <string_view>
 #include <utility>
@@ -18,10 +20,35 @@ using engine::math::scale;
 using engine::math::translation;
 using engine::math::Vec3;
 
-constexpr std::array<unsigned int, 26> kMenuGlyphs = {
-    0x118fe2eu, 0xf8be2fu, 0x1e0843eu, 0xf8c62fu,  0x1f0bc3fu, 0x0u,       0x0u,      0x0u, 0x1f2109fu,
-    0x0u,       0x0u,      0x1f08421u, 0x118d771u, 0x11cd671u, 0xe8c62eu,  0x10be2fu, 0x0u, 0x92be2fu,
-    0xf8383eu,  0x42109fu, 0xe8c631u,  0x0u,       0x11dd631u, 0x1151151u, 0x421151u, 0x0u};
+// Five-by-seven pixel glyphs. Neighboring pixels meet to form a single, solid letter.
+constexpr std::array<std::array<std::string_view, 7>, 26> kMenuGlyphs = {{
+    {"01110", "10001", "10001", "11111", "10001", "10001", "10001"}, // A
+    {"11110", "10001", "10001", "11110", "10001", "10001", "11110"}, // B
+    {"01111", "10000", "10000", "10000", "10000", "10000", "01111"}, // C
+    {"11110", "10001", "10001", "10001", "10001", "10001", "11110"}, // D
+    {"11111", "10000", "10000", "11110", "10000", "10000", "11111"}, // E
+    {"11111", "10000", "10000", "11110", "10000", "10000", "10000"}, // F
+    {"01111", "10000", "10000", "10111", "10001", "10001", "01111"}, // G
+    {"10001", "10001", "10001", "11111", "10001", "10001", "10001"}, // H
+    {"11111", "00100", "00100", "00100", "00100", "00100", "11111"}, // I
+    {"00111", "00010", "00010", "00010", "10010", "10010", "01100"}, // J
+    {"10001", "10010", "10100", "11000", "10100", "10010", "10001"}, // K
+    {"10000", "10000", "10000", "10000", "10000", "10000", "11111"}, // L
+    {"10001", "11011", "10101", "10101", "10001", "10001", "10001"}, // M
+    {"10001", "11001", "10101", "10011", "10001", "10001", "10001"}, // N
+    {"01110", "10001", "10001", "10001", "10001", "10001", "01110"}, // O
+    {"11110", "10001", "10001", "11110", "10000", "10000", "10000"}, // P
+    {"01110", "10001", "10001", "10001", "10101", "10010", "01101"}, // Q
+    {"11110", "10001", "10001", "11110", "10100", "10010", "10001"}, // R
+    {"01111", "10000", "10000", "01110", "00001", "00001", "11110"}, // S
+    {"11111", "00100", "00100", "00100", "00100", "00100", "00100"}, // T
+    {"10001", "10001", "10001", "10001", "10001", "10001", "01110"}, // U
+    {"10001", "10001", "10001", "10001", "10001", "01010", "00100"}, // V
+    {"10001", "10001", "10001", "10101", "10101", "10101", "01010"}, // W
+    {"10001", "10001", "01010", "00100", "01010", "10001", "10001"}, // X
+    {"10001", "10001", "01010", "00100", "00100", "00100", "00100"}, // Y
+    {"11111", "00001", "00010", "00100", "01000", "10000", "11111"}, // Z
+}};
 constexpr std::array<std::array<int, 4>, 6> kCubeFaces = {
     std::array<int, 4>{4, 5, 6, 7}, {1, 0, 3, 2}, {5, 1, 2, 6}, {0, 4, 7, 3}, {7, 6, 2, 3}, {0, 1, 5, 4}};
 constexpr std::array<Vec3, 6> kCubeNormals = {Vec3{0, 0, 1}, {0, 0, -1}, {1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}};
@@ -53,40 +80,39 @@ void appendBlock(PrimitiveData& primitive, Vec3 center, Vec3 size) {
     }
 }
 
-void appendMenuText(PrimitiveData& primitive, std::string_view text, float top, float pixelSize) {
+void appendMenuText(PrimitiveData& outline, PrimitiveData& face, std::string_view text, float top,
+                    float pixelSize) {
     const float width = (static_cast<float>(text.size()) * 6 - 1) * pixelSize;
     const float left = -width * .5f;
     for (std::size_t character = 0; character < text.size(); ++character) {
         const int letter = text[character] - 'A';
         if (letter < 0 || letter >= static_cast<int>(kMenuGlyphs.size()))
             continue;
-        const unsigned int glyph = kMenuGlyphs[letter];
-        for (int row = 0; row < 5; ++row) {
+        for (int row = 0; row < 7; ++row) {
             for (int column = 0; column < 5; ++column) {
-                if (((glyph >> (row * 5 + column)) & 1u) == 0)
+                if (kMenuGlyphs[letter][row][column] != '1')
                     continue;
-                appendBlock(primitive,
-                            {left + (static_cast<float>(character) * 6 + column + .5f) * pixelSize,
-                             top - (row + .5f) * pixelSize, .12f},
-                            {pixelSize * .78f, pixelSize * .78f, pixelSize * .92f});
+                const float x = left + (static_cast<float>(character) * 6 + column + .5f) * pixelSize;
+                const float y = top - (row + .5f) * pixelSize;
+                // A dark, extruded silhouette sits behind the light front of each letter.
+                appendBlock(outline, {x, y, 0}, {pixelSize * 1.2f, pixelSize * 1.2f, .15f});
+                appendBlock(face, {x, y, .085f}, {pixelSize, pixelSize, .04f});
             }
         }
     }
 }
 
-ModelData makeMenuLettering() {
+ModelData makeMenuLettering(std::string_view label, float pixelSize) {
     ModelData data;
-    PrimitiveData lettering;
-    lettering.material.baseColor = {1.0f, .84f, .52f, 1};
-    lettering.material.emissiveFactor = {.10f, .055f, .018f};
-    lettering.material.roughness = .36f;
-    lettering.material.metallic = .18f;
-    appendMenuText(lettering, "SUBWAY MONEY", 1.06f, .03f);
-    appendMenuText(lettering, "PLAY", .45f, .038f);
-    appendMenuText(lettering, "OPTIONS", .05f, .038f);
-    appendMenuText(lettering, "CREDITS", -.35f, .038f);
-    appendMenuText(lettering, "EXIT", -.75f, .038f);
-    data.primitives.push_back(std::move(lettering));
+    PrimitiveData outline, face;
+    outline.material.baseColor = {.075f, .035f, .018f, 1};
+    outline.material.roughness = .72f;
+    face.material.baseColor = {1.0f, .82f, .40f, 1};
+    face.material.emissiveFactor = {.20f, .12f, .035f};
+    face.material.roughness = .6f;
+    appendMenuText(outline, face, label, pixelSize * 3.5f, pixelSize);
+    data.primitives.push_back(std::move(outline));
+    data.primitives.push_back(std::move(face));
     return data;
 }
 
@@ -96,9 +122,9 @@ ModelData makeMenuCursor() {
     cursor.material.baseColor = {1.0f, .74f, .30f, 1};
     cursor.material.emissiveFactor = {.14f, .065f, .012f};
     cursor.material.roughness = .38f;
-    appendBlock(cursor, {-.025f, .055f, .12f}, {.045f, .035f, .065f});
-    appendBlock(cursor, {.025f, 0, .12f}, {.045f, .035f, .065f});
-    appendBlock(cursor, {-.025f, -.055f, .12f}, {.045f, .035f, .065f});
+    appendBlock(cursor, {-.035f, .075f, .12f}, {.07f, .07f, .09f});
+    appendBlock(cursor, {.035f, 0, .12f}, {.07f, .07f, .09f});
+    appendBlock(cursor, {-.035f, -.075f, .12f}, {.07f, .07f, .09f});
     data.primitives.push_back(std::move(cursor));
     return data;
 }
@@ -111,11 +137,16 @@ struct Renderer::Impl {
     game::GameAssets assets;
     game::WorldScene world;
     game::PlayerCharacter menuPlayer;
-    engine::graphics::Model menuLettering;
+    engine::graphics::Model menuTitle;
+    std::array<engine::graphics::Model, 4> menuLabels;
     engine::graphics::Model menuCursor;
     engine::graphics::Scene menuScene;
     engine::graphics::Size drawable;
     std::size_t selectionCursorIndex = 0;
+    std::size_t menuTitleIndex = 0;
+    std::array<std::size_t, 4> menuLabelIndices{};
+    std::array<float, 4> menuHover{};
+    float previousMenuTime = -1;
     explicit Impl(const std::filesystem::path& root)
         : window({.title = GameConfig::kWindowTitle, .size = {.width = 720, .height = 1280}}),
           graphics(
@@ -131,42 +162,124 @@ struct Renderer::Impl {
                                     GameConfig::kPsxNightFogColor[2]},
                .psxFogFollowsSky = GameConfig::kPsxFogFollowsSky}),
           assets(root, GameConfig::kMipmappedTextures), world(assets),
-          menuPlayer(*assets.model(game::ModelId::PlayerCat).animationData()), menuLettering(makeMenuLettering()),
+          menuPlayer(*assets.model(game::ModelId::PlayerCat).animationData()),
+          menuTitle(makeMenuLettering("SUBWAY MONEY", .043f)),
+          menuLabels{engine::graphics::Model(makeMenuLettering("PLAY", .068f)),
+                     engine::graphics::Model(makeMenuLettering("OPTIONS", .068f)),
+                     engine::graphics::Model(makeMenuLettering("CREDITS", .068f)),
+                     engine::graphics::Model(makeMenuLettering("EXIT", .068f))},
           menuCursor(makeMenuCursor()),
           menuScene(world.build(0, 0, 0, {}, {})), drawable(window.drawableSize()) {
-        menuScene.camera.position = {0, GameConfig::kMenuCameraHeight, GameConfig::kMenuCameraZ};
-        menuScene.camera.target = {0, GameConfig::kMenuCameraLookHeight, GameConfig::kMenuCameraLookZ};
-        menuScene.camera.verticalFov = GameConfig::kMenuCameraFov;
-        menuScene.camera.fisheyeStrength = 0;
-        using namespace engine::math;
-        const Mat4 panel = menuPanelTransform();
+        menuScene.camera = game::menuCamera(aspect());
+        // The menu is close to the camera, so concentrate shadow-map detail on the street around it.
+        menuScene.light.direction = {GameConfig::kMenuLightDirection[0], GameConfig::kMenuLightDirection[1],
+                                     GameConfig::kMenuLightDirection[2]};
+        menuScene.light.shadow.center = {0, 1, GameConfig::kPlayerZ};
+        menuScene.light.shadow.halfWidth = 12;
+        menuScene.light.shadow.halfHeight = 12;
         engine::graphics::ModelInstance text;
-        text.model = &menuLettering;
         text.pbrSurface = true;
-        text.transform = panel;
+        text.model = &menuTitle;
+        menuTitleIndex = menuScene.objects.size();
         menuScene.objects.emplace_back(text);
+        for (std::size_t i = 0; i < menuLabels.size(); ++i) {
+            text.model = &menuLabels[i];
+            menuLabelIndices[i] = menuScene.objects.size();
+            menuScene.objects.emplace_back(text);
+        }
         engine::graphics::ModelInstance cursor;
         cursor.model = &menuCursor;
         cursor.pbrSurface = true;
-        cursor.transform = panel;
         selectionCursorIndex = menuScene.objects.size();
         menuScene.objects.emplace_back(cursor);
-        updateMenuSelection(0);
+        updateMenuSelection(0, -1, 0);
+    }
+    float aspect() const {
+        return drawable.height > 0 ? static_cast<float>(drawable.width) / drawable.height : 1.0f;
     }
     engine::math::Mat4 menuPanelTransform() const {
-        return engine::math::multiply(engine::math::translation({1.3f, 1.65f, GameConfig::kPlayerZ - 1.0f}),
-                                      engine::math::rotateY(engine::math::radians(-12)));
+        using namespace engine::math;
+        // Put the text alongside the cat, angled toward the camera instead of on a screen-space plane.
+        const float distance = (menuScene.camera.position.z - GameConfig::kPlayerZ) * .85f;
+        const auto& camera = menuScene.camera;
+        const Vec3 forward = normalize(camera.target - camera.position);
+        const Vec3 right = normalize(cross(forward, camera.up));
+        const Vec3 up = cross(right, forward);
+        const float halfHeight = distance * std::tan(radians(camera.verticalFov) * .5f);
+        const float halfWidth = halfHeight * aspect();
+        const float size = std::min(halfWidth * .90f / 3.2f, halfHeight * 1.60f / 3.5f);
+        const Vec3 center{camera.position.x + forward.x * distance + right.x * halfWidth * .50f,
+                          camera.position.y + forward.y * distance + up.y * halfHeight * .04f,
+                          camera.position.z + forward.z * distance + up.z * halfHeight * .04f};
+        const float pitch = std::atan2(forward.y, -forward.z);
+        return multiply(translation(center),
+                        multiply(rotateX(pitch), multiply(rotateY(radians(-18)), scale({size, size, size}))));
     }
-    void updateMenuSelection(int selection) {
+    static float labelX(int index) { return (static_cast<float>(index) - 1.5f) * .10f; }
+    static float labelY(int index) { return .662f - .66f * static_cast<float>(index); }
+    static float labelHalfWidth(int index) {
+        constexpr std::array<float, 4> widths = {.782f, 1.394f, 1.394f, .782f};
+        return widths[index];
+    }
+    void updateMenuSelection(int selection, int pressed, float time) {
         using namespace engine::math;
         const Mat4 panel = menuPanelTransform();
-        const float centerY = .36f - .40f * static_cast<float>(std::clamp(selection, 0, 3));
-        constexpr std::array<float, 4> textHalfWidths = {.414f, .738f, .738f, .414f};
+        const int selected = std::clamp(selection, 0, 3);
+        const float dt = previousMenuTime < 0 ? 1.0f : std::clamp(time - previousMenuTime, 0.0f, .1f);
+        previousMenuTime = time;
+        auto& title = std::get<engine::graphics::ModelInstance>(menuScene.objects.at(menuTitleIndex));
+        title.transform = multiply(panel, translation({0, 1.6995f, 0}));
+        for (int i = 0; i < 4; ++i) {
+            const float target = i == selected ? 1.0f : 0.0f;
+            menuHover[i] = std::lerp(menuHover[i], target, 1 - std::exp(-12 * dt));
+            const bool down = i == pressed;
+            const float s = 1 + .06f * menuHover[i] - (down ? .09f : 0);
+            const Mat4 offset = multiply(translation({labelX(i), labelY(i), .07f * menuHover[i] - (down ? .14f : 0)}),
+                                         scale({s, s, s}));
+            auto& item = std::get<engine::graphics::ModelInstance>(menuScene.objects.at(menuLabelIndices[i]));
+            item.transform = multiply(panel, offset);
+            item.emissiveScale = 1 + .8f * menuHover[i];
+        }
         auto& cursor = std::get<engine::graphics::ModelInstance>(menuScene.objects.at(selectionCursorIndex));
-        cursor.transform = multiply(panel, translation({-textHalfWidths[std::clamp(selection, 0, 3)] - .12f,
-                                                        centerY, 0}));
+        cursor.transform = multiply(panel, translation({labelX(selected) - labelHalfWidth(selected) - .23f,
+                                                        labelY(selected), .08f}));
     }
-    void updateMenuPlayer(float time, int selection) {
+    int menuHitTest(int x, int y) const {
+        using namespace engine::math;
+        int width = 0, height = 0;
+        SDL_GetWindowSize(window.nativeHandle(), &width, &height);
+        if (width <= 0 || height <= 0 || x < 0 || y < 0 || x >= width || y >= height)
+            return -1;
+        const Vec2 point{2.0f * x / width - 1, 1 - 2.0f * y / height};
+        const Mat4 vp = menuScene.camera.viewProjection(aspect());
+        const auto project = [&](const Mat4& transform, Vec3 p) {
+            const Mat4 m = multiply(vp, transform);
+            const float w = m.values[3] * p.x + m.values[7] * p.y + m.values[11] * p.z + m.values[15];
+            const Vec3 v = transformPoint(m, p);
+            return Vec2{v.x / w, v.y / w};
+        };
+        const auto side = [](Vec2 a, Vec2 b, Vec2 p) {
+            return (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
+        };
+        for (int i = 0; i < 4; ++i) {
+            const auto& item = std::get<engine::graphics::ModelInstance>(menuScene.objects.at(menuLabelIndices[i]));
+            const float half = labelHalfWidth(i) + .12f;
+            const std::array<Vec2, 4> corners = {project(item.transform, {-half, -.31f, .105f}),
+                                                  project(item.transform, {half, -.31f, .105f}),
+                                                  project(item.transform, {half, .31f, .105f}),
+                                                  project(item.transform, {-half, .31f, .105f})};
+            bool positive = false, negative = false;
+            for (int edge = 0; edge < 4; ++edge) {
+                const float cross = side(corners[edge], corners[(edge + 1) % 4], point);
+                positive |= cross > 0;
+                negative |= cross < 0;
+            }
+            if (!(positive && negative))
+                return i;
+        }
+        return -1;
+    }
+    void updateMenuPlayer(float time, int selection, int pressed) {
         menuPlayer.updateMenu(time);
         for (auto& object : menuScene.objects) {
             auto* character = std::get_if<engine::graphics::ModelInstance>(&object);
@@ -179,10 +292,10 @@ struct Renderer::Impl {
             character->transform = engine::math::multiply(
                 engine::math::translation({GameConfig::kMenuCatX, -ground + menuPlayer.lift(), GameConfig::kMenuCatZ}),
                 engine::math::multiply(
-                    engine::math::rotateY(-engine::math::kPi * .5f + engine::math::radians(10)),
+                    engine::math::rotateY(engine::math::radians(GameConfig::kMenuCharacterYawDegrees)),
                     engine::math::translation({-anchor.x, 0, -anchor.z})));
         }
-        updateMenuSelection(selection);
+        updateMenuSelection(selection, pressed, time);
     }
 };
 Renderer::Renderer(std::filesystem::path assetRoot) : assetRoot_(std::move(assetRoot)) {
@@ -237,7 +350,10 @@ bool Renderer::distanceFog() const {
 engine::graphics::RenderMode Renderer::renderMode() const {
     return impl_ ? impl_->graphics.mode() : engine::graphics::RenderMode::Normal;
 }
-void Renderer::renderMenu(const float time, const int selection) const {
+int Renderer::menuHitTest(int x, int y) const {
+    return impl_ ? impl_->menuHitTest(x, y) : -1;
+}
+void Renderer::renderMenu(const float time, const int selection, const int pressed) const {
     if (!impl_) {
         return;
     }
@@ -246,7 +362,8 @@ void Renderer::renderMenu(const float time, const int selection) const {
         return;
     }
     // The street stays frozen while the separate menu pose gives the cat a subtle foot tap.
-    impl_->updateMenuPlayer(time, selection);
+    impl_->menuScene.camera = game::menuCamera(impl_->aspect());
+    impl_->updateMenuPlayer(time, selection, pressed);
     impl_->graphics.render(impl_->menuScene, impl_->drawable);
     impl_->window.swap();
 }
@@ -262,7 +379,7 @@ void Renderer::render(const float playerX, const float roadScroll, const float g
         return;
     }
     impl_->graphics.render(impl_->world.build(playerX, roadScroll, gameTime, entities, collectEffects, effectRemainder,
-                                              nightBlend, playerSpeed, cameraBlend),
+                                              nightBlend, playerSpeed, cameraBlend, impl_->aspect()),
                            impl_->drawable);
     impl_->window.swap();
 }

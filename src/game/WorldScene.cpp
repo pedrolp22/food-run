@@ -16,6 +16,18 @@ constexpr int kRoadSubdivisions = 6;
 constexpr float subLength = kLaneSegmentLength / kRoadSubdivisions;
 
 } // namespace
+Camera menuCamera(float aspect) {
+    aspect = std::isfinite(aspect) ? std::clamp(aspect, .3f, 3.0f) : 1.0f;
+    const float distance = (kMenuCameraZ - kPlayerZ) * std::max(1.0f, .8f / aspect);
+    const float halfWidth = distance * std::tan(radians(kMenuCameraFov) * .5f) * aspect;
+    const float x = halfWidth * .34f;
+    Camera camera;
+    camera.position = {x, kMenuCameraHeight, kPlayerZ + distance};
+    camera.target = {x, kMenuCameraLookHeight, kMenuCameraLookZ};
+    camera.verticalFov = kMenuCameraFov;
+    camera.fisheyeStrength = 0;
+    return camera;
+}
 WorldScene::WorldScene(const GameAssets& assets)
     : assets_(assets), player_(*assets.model(ModelId::PlayerCat).animationData()),
       track_({kWorldCurvature, kRoadSway, -5, 24, kLaneStartZ}) {
@@ -64,13 +76,15 @@ WorldScene::WorldScene(const GameAssets& assets)
 }
 const Scene& WorldScene::build(float playerX, float roadScroll, float gameTime, std::span<const Entity> entities,
                                std::span<const CollectEffect> effects, float effectRemainder, float nightBlend,
-                               float playerSpeed, float cameraBlend) {
+                               float playerSpeed, float cameraBlend, float aspect) {
     const float cameraT = std::clamp(cameraBlend, 0.0f, 1.0f);
     const float easedCameraT = cameraT * cameraT * (3.0f - 2.0f * cameraT);
     const auto blend = [easedCameraT](float from, float to) { return std::lerp(from, to, easedCameraT); };
-    scene_.camera.position = {0, blend(kMenuCameraHeight, kCameraHeight), blend(kMenuCameraZ, kCameraZ)};
-    scene_.camera.target = {0, blend(kMenuCameraLookHeight, kCameraTargetHeight),
-                            blend(kMenuCameraLookZ, kCameraTargetZ)};
+    const auto menu = menuCamera(aspect);
+    scene_.camera.position = {blend(menu.position.x, 0), blend(menu.position.y, kCameraHeight),
+                              blend(menu.position.z, kCameraZ)};
+    scene_.camera.target = {blend(menu.target.x, 0), blend(menu.target.y, kCameraTargetHeight),
+                            blend(menu.target.z, kCameraTargetZ)};
     scene_.camera.verticalFov = blend(kMenuCameraFov, kCameraVerticalFov);
     scene_.camera.fisheyeStrength = blend(0.0f, kCameraFisheyeStrength);
     scene_.time = gameTime;
@@ -81,9 +95,15 @@ const Scene& WorldScene::build(float playerX, float roadScroll, float gameTime, 
     const Vec3 fromDirection = normalize({from[0], from[1], from[2]});
     const Vec3 toDirection = normalize({to[0], to[1], to[2]});
     const float lightBlend = phase < .5f ? phase * 2 : phase * 2 - 1;
-    scene_.light.direction = normalize({std::lerp(fromDirection.x, toDirection.x, lightBlend),
-                                        std::lerp(fromDirection.y, toDirection.y, lightBlend),
-                                        std::lerp(fromDirection.z, toDirection.z, lightBlend)});
+    const Vec3 gameLight = normalize({std::lerp(fromDirection.x, toDirection.x, lightBlend),
+                                      std::lerp(fromDirection.y, toDirection.y, lightBlend),
+                                      std::lerp(fromDirection.z, toDirection.z, lightBlend)});
+    const Vec3 menuLight = normalize({kMenuLightDirection[0], kMenuLightDirection[1], kMenuLightDirection[2]});
+    scene_.light.direction = normalize({blend(menuLight.x, gameLight.x), blend(menuLight.y, gameLight.y),
+                                        blend(menuLight.z, gameLight.z)});
+    scene_.light.shadow.center = {0, blend(1, 4), blend(kPlayerZ, -32)};
+    scene_.light.shadow.halfWidth = blend(12, 76);
+    scene_.light.shadow.halfHeight = blend(12, 88);
     scene_.light.ambient = phase < .5f ? std::lerp(kSkyAmbientLight[0], kSkyAmbientLight[1], phase * 2)
                                        : std::lerp(kSkyAmbientLight[1], kSkyAmbientLight[2], phase * 2 - 1);
     scene_.sky.sunColor = scene_.sky.palette().cloudTint;
@@ -110,7 +130,7 @@ const Scene& WorldScene::build(float playerX, float roadScroll, float gameTime, 
     const auto anchor = player_.anchor();
     const float groundY = pose.boundsCenter().y - pose.boundsHalfExtent().y;
     const float gameplayYaw = kPi * .5f + player_.heading();
-    const float menuYaw = -kPi * .5f + radians(10);
+    const float menuYaw = radians(kMenuCharacterYawDegrees);
     const float characterYaw = std::lerp(menuYaw, gameplayYaw, easedCameraT);
     ModelInstance character;
     character.model = &assets_.model(ModelId::PlayerCat);

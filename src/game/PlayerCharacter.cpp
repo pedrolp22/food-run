@@ -155,10 +155,6 @@ void repositionShoulder(engine::assets::ModelData& data, int shoulder, int elbow
         }
     }
 }
-float smoothStep(float from, float to, float value) {
-    const float t = std::clamp((value - from) / (to - from), 0.0f, 1.0f);
-    return t * t * (3 - 2 * t);
-}
 } // namespace
 void preparePlayerModel(engine::assets::ModelData& data) {
     for (auto& primitive : data.primitives) {
@@ -250,16 +246,16 @@ void PlayerCharacter::update(float playerX, float distance, float time, float sp
         const float sign = side == 0 ? 1.f : -1.f;
         const float cycle = phase_ + side * kPi;
         const float stride = std::sin(cycle);
-        const float armSwing = -std::sin(phase_) * motion_ * cadence * radians(30);
+        const float armSwing = -std::sin(phase_) * motion_ * cadence * radians(20);
         // Arms extend along opposite Z; a shared Y swing moves them in opposite forward/back
         // directions, counter to the legs, instead of flapping them up and down.
-        rotate(shoulders_[side], sign * radians(48), armSwing);
-        rotate(elbows_[side], 0, sign * motion_ * radians(28));
+        rotate(shoulders_[side], sign * radians(32), armSwing);
+        rotate(elbows_[side], 0, sign * motion_ * radians(14));
         rotate(wrists_[side], 0, sign * motion_ * radians(5) * std::sin(cycle - .3f));
         // The cat faces local +X, so Z-axis hip/knee motion swings the legs through the running
         // plane. Matching knee directions keep the lower legs from bowing toward each other.
-        rotate(thighs_[side], 0, 0, stride * motion_ * cadence * radians(30));
-        const float knee = motion_ * (radians(7) + radians(38) * std::max(0.f, std::cos(cycle + .15f)));
+        rotate(thighs_[side], 0, 0, stride * motion_ * cadence * radians(22));
+        const float knee = motion_ * (radians(5) + radians(22) * std::max(0.f, std::cos(cycle + .15f)));
         rotate(knees_[side], 0, 0, knee);
     }
     for (std::size_t i = 0; i < tail_.size(); ++i) {
@@ -281,10 +277,6 @@ void PlayerCharacter::updateMenu(float time) {
     const float phase = time * (2 * kPi / GameConfig::kPlayerMenuTapPeriod);
     const float tapLeft = std::pow(std::max(0.f, std::sin(phase)), 8.f);
     const float tapRight = std::pow(std::max(0.f, std::sin(phase + kPi)), 8.f);
-    constexpr float scratchPeriod = 3.8f;
-    const float scratchPhase = std::fmod(std::max(time, 0.0f), scratchPeriod) / scratchPeriod;
-    const float scratch = smoothStep(.08f, .20f, scratchPhase) * (1 - smoothStep(.72f, .86f, scratchPhase));
-    const float scratchFidget = std::sin(time * 17.0f);
     pose_.reset();
     rotate(root_, radians(.8f * std::sin(phase * .43f)), 0, radians(1.2f * std::sin(phase * .71f)));
     // The cat faces the camera while keeping its attention on the floating menu beside it.
@@ -293,21 +285,11 @@ void PlayerCharacter::updateMenu(float time) {
         const float sign = side == 0 ? 1.f : -1.f;
         const float fidget = std::sin(phase * .7f + side * 1.3f);
         const float footTap = side == 0 ? tapLeft : tapRight;
-        float shoulder = sign * radians(42 + 1.5f * fidget);
-        float elbow = sign * radians(18 + 1.5f * fidget);
-        float wrist = sign * radians(3 * fidget);
-        if (side == 1) {
-            // Lift the far-side upper arm, then fold the forearm back toward the head.
-            // This rig needs a large positive elbow bend to bring the paw in from its long side reach.
-            shoulder = std::lerp(shoulder, radians(50 + 2 * scratchFidget), scratch);
-            elbow = std::lerp(elbow, radians(156 + 5 * scratchFidget), scratch);
-            wrist = std::lerp(wrist, radians(2 + 4 * scratchFidget), scratch);
-        }
-        rotate(shoulders_[side], shoulder);
-        rotate(elbows_[side], elbow);
-        rotate(wrists_[side], wrist);
-        rotate(thighs_[side], (side == 0 ? -1 : 1) * radians(2 + 7 * footTap));
-        const float kneeBend = radians(3 + 12 * footTap);
+        rotate(shoulders_[side], sign * radians(30 + 1.5f * fidget));
+        rotate(elbows_[side], sign * radians(7 + fidget));
+        rotate(wrists_[side], sign * radians(2 * fidget));
+        rotate(thighs_[side], (side == 0 ? -1 : 1) * radians(1 + 4 * footTap));
+        const float kneeBend = radians(2 + 6 * footTap);
         rotate(knees_[side], -sign * kneeBend);
     }
     for (std::size_t i = 0; i < tail_.size(); ++i) {

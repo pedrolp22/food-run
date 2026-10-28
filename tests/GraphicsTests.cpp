@@ -2144,11 +2144,64 @@ void menuOverlayChecks(game::WorldScene& world, SceneRenderer& renderer, Size si
     renderer.setMode(RenderMode::Normal);
 }
 
+void ambientOcclusionChecks(Size size) {
+    using namespace engine::math;
+    RenderSettings plainSettings;
+    plainSettings.screenSpaceAmbientOcclusion = false;
+    plainSettings.worldReflectionMapSize = 0;
+    plainSettings.planarReflectionSize = 0;
+    auto aoSettings = plainSettings;
+    aoSettings.screenSpaceAmbientOcclusion = true;
+    SceneRenderer plain(plainSettings), ao(aoSettings);
+    Scene scene;
+    scene.camera.position = {0, 4, 7};
+    scene.camera.target = {0, 0, 0};
+    scene.camera.fisheyeStrength = .2f;
+    Quad floor;
+    floor.model = multiply(rotateX(kPi * .5f), scale({40, 40, 1}));
+    floor.color = {.65f, .65f, .65f};
+    floor.normal = {0, 1, 0};
+    floor.receivesShadow = false;
+    floor.castsShadow = false;
+    scene.objects.emplace_back(floor);
+    for (auto mode : {RenderMode::Normal, RenderMode::Psx}) {
+        plain.setMode(mode);
+        ao.setMode(mode);
+        plain.render(scene, size);
+        const auto unoccluded = capture(size);
+        ao.render(scene, size);
+        const auto flat = capture(size);
+        std::size_t changed = 0;
+        for (std::size_t i = 0; i < flat.size(); i += 3) {
+            if (int(unoccluded[i]) - int(flat[i]) > 8)
+                ++changed;
+        }
+        // A flat plane has no ambient occluders, even through the lens.
+        CHECK(changed < static_cast<std::size_t>(size.width * size.height / 500));
+        Cube block;
+        block.model = multiply(translation({0, .5f, 0}), scale({1, 1, 1}));
+        block.color = {.65f, .65f, .65f};
+        scene.objects.emplace_back(block);
+        plain.render(scene, size);
+        const auto contactPlain = capture(size);
+        ao.render(scene, size);
+        const auto contactAo = capture(size);
+        changed = 0;
+        for (std::size_t i = 0; i < contactAo.size(); i += 3) {
+            if (int(contactPlain[i]) - int(contactAo[i]) > 8)
+                ++changed;
+        }
+        CHECK(changed > 5); // Contact shading remains active.
+        scene.objects.pop_back();
+    }
+}
+
 void sceneChecks() {
     engine::platform::Window window({"Renderer regression tests", {360, 640}, true, false});
     game::GameAssets assets(TEST_ASSET_DIR);
     game::WorldScene world(assets);
     SceneRenderer renderer;
+    ambientOcclusionChecks(window.drawableSize());
     CHECK(!renderer.psxDitheredShadows());
     for (float scroll : {0.0f, 5.0f, 37.0f, 99.0f, 1217.0f}) {
         buildingShaderChecks(assets, world, scroll);

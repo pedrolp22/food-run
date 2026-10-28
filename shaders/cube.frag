@@ -15,7 +15,8 @@ void main() {
     float ambient = clamp(uAmbient * (0.95 + 0.30 * normal.y), 0.0, 1.0);
     vec2 shade = uVertexLighting ? vVertexLight : vec2(ambient, (1.0 - ambient) * diffuse);
     float visibility = sunVisibility(diffuse);
-    float light = shade.x * ditheredShadowAmbient(visibility, diffuse) * ambientOcclusionVisibility(visibility) +
+    float light = shade.x * ditheredShadowAmbient(visibility, diffuse) *
+                      ambientOcclusionVisibility(visibility, diffuse) +
                   shade.y * visibility;
     FragColor = vec4(distanceFog(uColor * light), 1.0);
 }

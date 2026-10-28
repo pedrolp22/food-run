@@ -20,6 +20,7 @@ constexpr std::string_view unlit = R"(
 float shadowedLight(float light, float ambient) { return light; }
 float sunVisibility(float diffuse) { return 1.0; }
 float ditheredShadowAmbient(float visibility, float diffuse) { return 1.0; }
+float ambientOcclusionVisibility(float visibility, float diffuse) { return 1.0; }
 vec3 distanceFog(vec3 color) { return color; }
 )";
 constexpr std::string_view whiteFragment = R"(#version 330 core
@@ -297,7 +298,8 @@ void colorChecks() {
     constexpr int width = 32, height = 17; // Odd height also checks the top-down dither phase.
     RenderTarget source({width, height}, RenderTarget::Kind::ColorDepth);
     std::array<unsigned char, width * height * 3> texels{};
-    ShaderProgram program(shaders::retro_vert, shaders::retro_frag, "PS1 color regression", shaders::lens_glsl);
+    ShaderProgram program(shaders::retro_vert, shaders::retro_frag, "PS1 color regression",
+                          std::string(shaders::lens_glsl) + std::string(shaders::ambient_occlusion_glsl));
     program.bind();
     glUniform2f(program.uniform("uScale"), 2, 2);
     glUniform1i(program.uniform("uTexture"), 0);
@@ -488,7 +490,8 @@ void shadowBlendChecks() {
 
     draw(.25f, 1);
     RenderTarget enlarged({width * 3, height * 3}, RenderTarget::Kind::ColorDepth);
-    ShaderProgram presentation(shaders::retro_vert, shaders::retro_frag, "shadow enlargement", shaders::lens_glsl);
+    ShaderProgram presentation(shaders::retro_vert, shaders::retro_frag, "shadow enlargement",
+                               std::string(shaders::lens_glsl) + std::string(shaders::ambient_occlusion_glsl));
     presentation.bind();
     glUniform2f(presentation.uniform("uScale"), 2, 2);
     glUniform1i(presentation.uniform("uTexture"), 0);

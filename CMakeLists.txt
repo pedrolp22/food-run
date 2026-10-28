@@ -40,6 +40,16 @@ endif()
 if(SUBWAY_BUILD_GRAPHICS)
     add_library(subway_stb STATIC external/stb_image_impl.c)
     target_include_directories(subway_stb SYSTEM PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/external")
+    add_executable(subway_texture_cooker tools/TextureCooker.cpp)
+    target_compile_features(subway_texture_cooker PRIVATE cxx_std_20)
+    target_include_directories(subway_texture_cooker PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+    target_link_libraries(subway_texture_cooker PRIVATE subway_stb)
+    add_custom_target(cook_textures
+        COMMAND $<TARGET_FILE:subway_texture_cooker> "${SUBWAY_ASSET_DIR}"
+        DEPENDS subway_texture_cooker
+        COMMENT "Cooking source images into engine-ready mip chains"
+        VERBATIM
+    )
     include(cmake/EmbedShaders.cmake)
     subway_embed_shaders("${CMAKE_CURRENT_BINARY_DIR}/generated")
     subway_library(subway_graphics graphics
