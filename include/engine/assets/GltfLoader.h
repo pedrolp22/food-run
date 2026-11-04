@@ -3,6 +3,7 @@
 #include "engine/math/Math.h"
 #include <array>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -38,6 +39,7 @@ struct MaterialData {
     bool doubleSided = false;
     bool baseTextureNearest = false; // Preserve authored nearest sampling for pixel-art cutouts.
     bool baseTextureRepeat = false;
+    std::optional<std::array<std::uint8_t, 3>> baseTextureOpaqueBorderColor{};
     std::array<float, 3> emissiveFactor = {0, 0, 0}; // Linear glTF emission, independent of illumination.
     float emissiveStrength = 1;
     std::filesystem::path emissiveTexture;

@@ -22,6 +22,8 @@ class Window {
     void swap() const;
     void setTitle(const std::string& title) const;
     void setSize(graphics::Size size) const;
+    bool setVsync(bool enabled) const;
+    bool vsync() const;
     graphics::Size drawableSize() const;
     SDL_Window* nativeHandle() const { return window_; }
 

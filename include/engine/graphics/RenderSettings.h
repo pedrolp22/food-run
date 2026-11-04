@@ -6,6 +6,11 @@ namespace engine::graphics {
 struct RenderSettings {
     Size retroSize = {240, 320}; // PSX raster.
     int shadowMapSize = 2048;
+    bool shadows = true;
+    float renderScale = 1; // Normal mode resolution, [0.5, 1]; retro keeps its authored raster.
+    bool antiAliasing = false; // FXAA in normal mode.
+    bool materialDetail = true;
+    bool foliageParticles = true;
     float retroPixelStep = 1;         // PSX integer screen coordinates; zero disables snapping.
     float modelAffineStrength = 1;    // PSX only, [0, 1]: full affine mapping by default.
     bool psxSubdivideQuads = true;    // Stable geometry grids keep large roads/facades readable.

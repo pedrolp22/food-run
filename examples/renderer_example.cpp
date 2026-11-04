@@ -1,6 +1,6 @@
 #include "engine/graphics/SceneRenderer.h"
 #include "engine/platform/Window.h"
-#include <SDL2/SDL.h>
+#include <SDL.h>
 #include <chrono>
 #include <iostream>
 #include <string>
@@ -10,7 +10,7 @@ int main(int argc, char** argv) {
         using namespace engine::graphics;
         using namespace engine::math;
         const int frameLimit = argc > 1 ? std::stoi(argv[1]) : 0;
-        engine::platform::Window window({"Reusable renderer — G: PSX, F: fog, Esc: quit", {960, 640}});
+        engine::platform::Window window({"Reusable renderer - Esc: quit", {960, 640}});
         SceneRenderer renderer;
         Scene scene;
         scene.camera.position = {0, 5, 9};
@@ -37,12 +37,6 @@ int main(int argc, char** argv) {
                 if (event.type == SDL_KEYDOWN && !event.key.repeat) {
                     if (event.key.keysym.sym == SDLK_ESCAPE) {
                         running = false;
-                    }
-                    if (event.key.keysym.sym == SDLK_g) {
-                        renderer.setRetroMode(!renderer.retroMode());
-                    }
-                    if (event.key.keysym.sym == SDLK_f) {
-                        renderer.setPsxDistanceFog(!renderer.psxDistanceFog());
                     }
                 }
             }

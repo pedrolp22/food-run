@@ -633,6 +633,9 @@ struct PlanarReflectionPass::Impl {
 };
 PlanarReflectionPass::PlanarReflectionPass(const RenderSettings& settings) : impl_(std::make_unique<Impl>(settings)) {}
 PlanarReflectionPass::~PlanarReflectionPass() = default;
+void PlanarReflectionPass::setSettings(const RenderSettings& settings) {
+    impl_ = std::make_unique<Impl>(settings);
+}
 std::span<const PlanarReflectionView> PlanarReflectionPass::update(const Scene& scene, const ReflectionFrame& frame,
                                                                    RenderState& state) {
     impl_->update(scene, frame, state);

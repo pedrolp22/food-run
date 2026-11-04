@@ -1,5 +1,5 @@
 #include "engine/platform/Window.h"
-#include <SDL2/SDL.h>
+#include <SDL.h>
 #include <glad/glad.h>
 #include <iostream>
 #include <stdexcept>
@@ -84,5 +84,12 @@ graphics::Size Window::drawableSize() const {
     graphics::Size size;
     SDL_GL_GetDrawableSize(window_, &size.width, &size.height);
     return size;
+}
+bool Window::setVsync(bool enabled) const {
+    makeCurrent();
+    return SDL_GL_SetSwapInterval(enabled ? 1 : 0) == 0;
+}
+bool Window::vsync() const {
+    return SDL_GL_GetSwapInterval() != 0;
 }
 } // namespace engine::platform

@@ -46,6 +46,7 @@ class PlanarReflectionPass {
     ~PlanarReflectionPass();
     PlanarReflectionPass(const PlanarReflectionPass&) = delete;
     PlanarReflectionPass& operator=(const PlanarReflectionPass&) = delete;
+    void setSettings(const RenderSettings& settings);
     std::span<const PlanarReflectionView> update(const Scene& scene, const ReflectionFrame& frame, RenderState& state);
     std::optional<PlanarReflectionBinding> binding(const Quad& surface, math::Vec3 cameraPosition) const;
 

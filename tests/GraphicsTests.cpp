@@ -5,11 +5,13 @@
 #include "engine/graphics/ShaderProgram.h"
 #include "engine/platform/Window.h"
 #include "game/WorldScene.h"
-#include <SDL2/SDL.h>
+#include <SDL.h>
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <fstream>
 #include <glad/glad.h>
 #include <iostream>
 #include <limits>
@@ -2196,12 +2198,95 @@ void ambientOcclusionChecks(Size size) {
     }
 }
 
+void runtimeSettingsChecks(const game::GameAssets& assets, Size size) {
+    using namespace engine::math;
+    RenderSettings settings;
+    settings.worldReflectionMapSize = 0;
+    settings.planarReflectionSize = 0;
+    settings.screenSpaceAmbientOcclusion = false;
+    settings.shadowMapSize = 512;
+    SceneRenderer renderer(settings);
+    Scene scene;
+    scene.camera.position = {0, 4, 7};
+    scene.camera.target = {0, 0, 0};
+    scene.camera.fisheyeStrength = .1f;
+    scene.light.shadow.center = {0, 0, 0};
+    scene.light.shadow.halfWidth = scene.light.shadow.halfHeight = 10;
+    Quad ground;
+    ground.model = multiply(rotateX(kPi * .5f), scale({30, 30, 1}));
+    ground.normal = {0, 1, 0};
+    ground.color = {.7f, .7f, .7f};
+    scene.objects.emplace_back(ground);
+    scene.objects.emplace_back(Cube{translation({0, .5f, 0}), {.9f, .1f, .05f}});
+    const auto frame = [&] {
+        renderer.render(scene, size);
+        checkState();
+        return capture(size);
+    };
+    const auto baseline = frame();
+    auto changed = settings;
+    changed.shadows = false;
+    renderer.setSettings(changed);
+    const auto unshadowed = frame();
+    std::size_t brighter = 0;
+    for (std::size_t i = 0; i < baseline.size(); i += 3) {
+        if (int(unshadowed[i]) > int(baseline[i]) + 10)
+            ++brighter;
+    }
+    CHECK(brighter > 20);
+    renderer.setSettings(settings);
+    CHECK(frame() == baseline);
+    changed = settings;
+    changed.renderScale = .5f;
+    renderer.setSettings(changed);
+    CHECK(frame() != baseline);
+    changed = settings;
+    changed.antiAliasing = true;
+    renderer.setSettings(changed);
+    CHECK(frame() != baseline);
+    renderer.setSettings(settings);
+    CHECK(frame() == baseline);
+    renderer.setMode(RenderMode::Psx);
+    const auto retro = frame();
+    changed.renderScale = .5f;
+    renderer.setSettings(changed);
+    CHECK(frame() == retro); // Normal resolution/FXAA preferences preserve the pixel raster.
+    renderer.render(scene, size, {384, 216});
+    checkState();
+    CHECK(capture(size) != retro);
+    CHECK(renderer.settings().retroSize.width == settings.retroSize.width);
+    CHECK(renderer.settings().retroSize.height == settings.retroSize.height);
+    CHECK(frame() == retro); // A menu raster override must not change the gameplay raster.
+    checkThrows([&] { renderer.render(scene, size, {0, 216}); });
+    renderer.setMode(RenderMode::Normal);
+    renderer.setSettings(settings);
+    Quad particle;
+    particle.model = multiply(translation({-1, 1, 1}), scale({.8f, .8f, 1}));
+    particle.color = {1, 0, 1};
+    scene.particles.push_back(particle);
+    CHECK(frame() != baseline);
+    changed = settings;
+    changed.foliageParticles = false;
+    renderer.setSettings(changed);
+    CHECK(frame() == baseline);
+    changed.renderScale = 0;
+    checkThrows([&] { renderer.setSettings(changed); });
+    CHECK(near(renderer.settings().renderScale, 1));
+    game::WorldScene world(assets);
+    CHECK(!world.build(0, 0, 1, {}, {}).particles.empty());
+    world.setFoliageParticles(false);
+    CHECK(world.build(0, 0, 1, {}, {}).particles.empty());
+    world.setFoliageParticles(true);
+    CHECK(!world.build(0, 0, 1, {}, {}).particles.empty());
+}
+
 void sceneChecks() {
     engine::platform::Window window({"Renderer regression tests", {360, 640}, true, false});
     game::GameAssets assets(TEST_ASSET_DIR);
     game::WorldScene world(assets);
     SceneRenderer renderer;
     ambientOcclusionChecks(window.drawableSize());
+    runtimeSettingsChecks(assets, window.drawableSize());
     CHECK(!renderer.psxDitheredShadows());
     for (float scroll : {0.0f, 5.0f, 37.0f, 99.0f, 1217.0f}) {
         buildingShaderChecks(assets, world, scroll);
@@ -2286,6 +2371,64 @@ void sceneChecks() {
 void ownershipChecks() {
     // A second independent context verifies teardown/recreation and loading failure recovery.
     engine::platform::Window window({"Resource lifetime tests", {160, 160}, false, false});
+    constexpr std::array<std::uint8_t, 3> matte = {69, 40, 60};
+    const auto rgba = [](const Texture& texture) {
+        std::vector<unsigned char> pixels(texture.size().width * texture.size().height * 4);
+        glBindTexture(GL_TEXTURE_2D, texture.id());
+        glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+        return pixels;
+    };
+    for (const auto name : {"elio.png", "lorenzo.png", "pedro.png"}) {
+        const auto path = std::filesystem::path(TEST_ASSET_DIR) / "textures/dev_icons" / name;
+        Texture source(path, {TextureFilter::Nearest});
+        Texture cutout(path, {TextureFilter::Nearest, false, false, true, matte});
+        const auto before = rgba(source), after = rgba(cutout);
+        const auto alpha = cutout.alphaMask();
+        CHECK(std::count(alpha.begin(), alpha.end(), 0) > 30);
+        CHECK(std::count(alpha.begin(), alpha.end(), 255) > 100);
+        for (std::size_t pixel = 0; pixel < alpha.size(); ++pixel) {
+            CHECK(after[pixel * 4 + 3] == alpha[pixel]); // GPU cutout agrees with geometry and picking.
+            for (int channel = 0; channel < 3; ++channel)
+                CHECK(before[pixel * 4 + channel] == after[pixel * 4 + channel]);
+        }
+    }
+    // An opaque matte inside the artwork stays intact; existing source alpha wins.
+    const auto fixture = std::filesystem::temp_directory_path() /
+        ("subway-matte-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".tga");
+    struct Cleanup {
+        std::filesystem::path path;
+        ~Cleanup() { std::error_code ignored; std::filesystem::remove(path, ignored); }
+    } cleanup{fixture};
+    std::array<unsigned char, 18 + 5 * 5 * 4> image{};
+    image[2] = 2; // Uncompressed true-color TGA, BGRA pixels.
+    image[12] = image[14] = 5;
+    image[16] = 32;
+    image[17] = 8 | 0x20; // Alpha bits and top-left image origin.
+    for (int y = 0; y < 5; ++y) {
+        for (int x = 0; x < 5; ++x) {
+            auto* pixel = image.data() + 18 + (y * 5 + x) * 4;
+            const bool wall = x >= 1 && x <= 3 && y >= 1 && y <= 3 && (x != 2 || y != 2);
+            pixel[0] = wall ? 200 : matte[2];
+            pixel[1] = wall ? 200 : matte[1];
+            pixel[2] = wall ? 200 : matte[0];
+            pixel[3] = 255;
+        }
+    }
+    const auto writeFixture = [&] {
+        std::ofstream output(fixture, std::ios::binary);
+        output.write(reinterpret_cast<const char*>(image.data()), image.size());
+        CHECK(output.good());
+    };
+    writeFixture();
+    Texture recovered(fixture, {TextureFilter::Mipmapped, false, false, true, matte});
+    CHECK(recovered.alphaMask()[0] == 0 && recovered.alphaMask()[12] == 255);
+    CHECK(recovered.maxMipLevel() == 2);
+    image[18 + 3] = 77;
+    writeFixture();
+    Texture preserved(fixture, {TextureFilter::Nearest, false, false, true, matte});
+    CHECK(preserved.alphaMask()[0] == 77 && preserved.alphaMask()[1] == 255);
+    Texture flipped(fixture, {TextureFilter::Nearest, false, true, true, matte});
+    CHECK(flipped.alphaMask()[20] == 77 && flipped.alphaMask()[0] == 255);
     checkThrows([] { Texture missing("/nonexistent/subway-texture.png"); });
     Texture original(std::filesystem::path(TEST_ASSET_DIR) / "textures/collectibles/water.png",
                      {TextureFilter::Nearest, false, true, true});

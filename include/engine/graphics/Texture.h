@@ -1,8 +1,10 @@
 #pragma once
 
 #include "engine/graphics/Types.h"
+#include <array>
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -13,6 +15,8 @@ struct TextureOptions {
     bool repeat = false;
     bool flipVertically = false;
     bool retainAlpha = false; // Opt in for silhouette geometry; ordinary textures keep no CPU pixels.
+    // Optional matte recovery for opaque exports. Existing source transparency is always preserved.
+    std::optional<std::array<std::uint8_t, 3>> opaqueBorderColor{};
 };
 class Texture {
   public:

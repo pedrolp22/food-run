@@ -162,11 +162,11 @@ constexpr float kNightStarTwinkleStrength = 0.6f;
 constexpr int kPsxInternalWidth = 240;
 constexpr int kPsxInternalHeight = 320;
 constexpr float kPsxDitherStrength = 1.0f;  // Color/shade transitions and shadow-edge blending; 0 disables dithering.
-constexpr bool kPsxDitheredShadows = false; // Saturn-style checkerboard transparency; H toggles it during play.
+constexpr bool kPsxDitheredShadows = false; // Default Saturn-style checkerboard transparency.
 // Ambient/sky attenuation in covered shadow pixels, [0, 1]; 0 restores the lighter shadows.
 constexpr float kPsxDitheredShadowDarkness = 0.8f;
 constexpr float kPsxSidewalkLodBias = -0.75f; // Nearest mip texels reduce shimmer; negative values retain finer grain.
-constexpr bool kPsxDistanceFog = true;        // Gentle distance fade for the PSX view; F toggles it during play.
+constexpr bool kPsxDistanceFog = true;        // Default distance fade for the PSX view.
 constexpr float kPsxFogStart = 45.0f;         // Camera-space distances; keep the player and nearby street clear.
 constexpr float kPsxFogEnd = 125.0f;          // Distant geometry disappears into the mist by this distance.
 constexpr std::array<float, 3> kPsxFogColor = {0.74f, 0.86f, 0.97f}; // Custom colors when sky matching is disabled.

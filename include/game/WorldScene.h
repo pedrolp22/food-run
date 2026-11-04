@@ -17,6 +17,7 @@ engine::graphics::Camera menuCamera(float aspect);
 class WorldScene {
   public:
     explicit WorldScene(const GameAssets& assets);
+    void setFoliageParticles(bool enabled);
     const engine::graphics::Scene& build(float playerX, float roadScroll, float gameTime,
                                          std::span<const Entity> entities, std::span<const CollectEffect> effects,
                                          float effectRemainder = 0, float nightBlend = 0, float playerSpeed = 0,
@@ -60,6 +61,7 @@ class WorldScene {
     float previousLeafTime_ = -1;
     float previousLeafScroll_ = 0;
     float previousLeafPlayerX_ = 0;
+    bool foliageParticles_ = true;
     void addDecor();
     void addStreetLamps(float scroll);
     std::vector<engine::math::Vec3> lampPosts_;

@@ -440,6 +440,12 @@ returns to the regular chase camera before simulation starts. The reusable `Scen
 for other scenes; it composites after geometry, effects and retro/lens presentation, fits the content rectangle, and
 never writes scene depth.
 
+Credits portraits reuse `extrudeSprite` to build alpha-cutout models with pixel contour walls. Their front material uses
+soft specular shading; the walls and back are rougher. `TextureOptions::opaqueBorderColor` optionally removes only an
+opaque, border-connected export matte, preserving any authored transparency. Both the model material and CPU silhouette
+use the same recovery. Picking intersects the animated mesh and checks its alpha, including during a turn.
+`MenuIconAnimation` supplies finite rigid shake/turn reactions; leaving Credits resets them, and idle portraits stay still.
+
 Shaders in `shaders/` are embedded by `cmake/EmbedShaders.cmake`. Editing a shader triggers regeneration on the next build,
 and running binaries do not depend on shader files or the working directory. Shared shadow sampling is in `lighting.glsl`;
 shared vertex snapping is in `vertex_snap.glsl`. `ShaderProgram` inserts shared sources after each stage's `#version` line.
@@ -544,7 +550,7 @@ Values must be finite and within [0, 1]. The game passes
 ### PSX distance fog
 
 `RenderSettings::psxDistanceFog` enables gentle distance cueing only in PSX mode. The game forwards
-its initial preference from `GameConfig::kPsxDistanceFog`; F toggles it independently of color/shadow dithering.
+its initial preference from `GameConfig::kPsxDistanceFog`; the Extra options page toggles it independently of color/shadow dithering.
 `psxFogStart` and `psxFogEnd` default to camera-space distances 45 and 125, keeping the player and nearby street clear while
 hiding distant road/building detail. Start must be finite and nonnegative; end must be finite and greater than start.
 Use the boolean preference to disable fog without changing its range.

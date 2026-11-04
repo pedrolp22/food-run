@@ -556,6 +556,12 @@ struct RetroProgram : PresentationProgram {
         : PresentationProgram(shaders::retro_frag, "retro"), ditherStrength(shader.uniform("uDitherStrength")) {}
 };
 
+struct PresentProgram : PresentationProgram {
+    int antiAliasing;
+    PresentProgram()
+        : PresentationProgram(shaders::present_frag, "presentation"), antiAliasing(shader.uniform("uAntiAliasing")) {}
+};
+
 struct ShadowProgram {
     ShaderProgram shader;
     SkinningUniforms skin;
@@ -587,7 +593,7 @@ struct Programs {
     MaterialProgram material;
     ModelProgram model;
     CubeProgram cube;
-    PresentationProgram present{shaders::present_frag, "presentation"};
+    PresentProgram present;
     RetroProgram retro;
     ShadowProgram shadow;
 };

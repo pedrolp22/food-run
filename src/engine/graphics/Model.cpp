@@ -57,7 +57,8 @@ Model::Model(const assets::ModelData& data) {
         if (!source.material.baseTexture.empty()) {
             const auto filter = source.material.baseTextureNearest ? TextureFilter::Nearest : TextureFilter::Linear;
             primitive.material.texture =
-                Texture(source.material.baseTexture, {filter, source.material.baseTextureRepeat, false});
+                Texture(source.material.baseTexture, {filter, source.material.baseTextureRepeat, false, false,
+                                                       source.material.baseTextureOpaqueBorderColor});
         }
         if (!source.material.metallicRoughnessTexture.empty()) {
             // Generated companions share the base-color UVs, including atlas coordinates outside [0, 1].

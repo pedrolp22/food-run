@@ -86,6 +86,41 @@ void flipVertically(MipPixels& mip) {
         std::swap_ranges(row, row + rowBytes, opposite);
     }
 }
+bool recoverOpaqueMatte(MipPixels& mip, const std::array<std::uint8_t, 3>& color) {
+    const std::size_t count = static_cast<std::size_t>(mip.width) * mip.height;
+    for (std::size_t pixel = 0; pixel < count; ++pixel) {
+        if (mip.rgba[pixel * 4 + 3] != 255)
+            return false;
+    }
+    std::vector<std::size_t> pending;
+    const auto visit = [&](int x, int y) {
+        if (x < 0 || x >= mip.width || y < 0 || y >= mip.height)
+            return;
+        const std::size_t pixel = static_cast<std::size_t>(y) * mip.width + x;
+        auto* rgba = mip.rgba.data() + pixel * 4;
+        if (rgba[3] == 255 && rgba[0] == color[0] && rgba[1] == color[1] && rgba[2] == color[2]) {
+            rgba[3] = 0;
+            pending.push_back(pixel);
+        }
+    };
+    for (int x = 0; x < mip.width; ++x) {
+        visit(x, 0);
+        visit(x, mip.height - 1);
+    }
+    for (int y = 0; y < mip.height; ++y) {
+        visit(0, y);
+        visit(mip.width - 1, y);
+    }
+    for (std::size_t head = 0; head < pending.size(); ++head) {
+        const int x = static_cast<int>(pending[head] % mip.width);
+        const int y = static_cast<int>(pending[head] / mip.width);
+        visit(x - 1, y);
+        visit(x + 1, y);
+        visit(x, y - 1);
+        visit(x, y + 1);
+    }
+    return !pending.empty();
+}
 } // namespace
 
 Texture Texture::fromRedChannel(Size size, std::span<const float> pixels) {
@@ -113,7 +148,7 @@ Texture Texture::fromRedChannel(Size size, std::span<const float> pixels) {
 Texture::Texture(const std::filesystem::path& path, TextureOptions options) : repeat_(options.repeat) {
     const bool mipmapped = options.filter == TextureFilter::Mipmapped || options.filter == TextureFilter::Trilinear;
     std::vector<MipPixels> levels;
-    const bool cooked = loadCooked(path, mipmapped, levels);
+    bool cooked = loadCooked(path, mipmapped, levels);
     if (cooked) {
         size_ = {levels.front().width, levels.front().height};
     } else {
@@ -127,6 +162,10 @@ Texture::Texture(const std::filesystem::path& path, TextureOptions options) : re
         MipPixels base{size_.width, size_.height, {}};
         base.rgba.assign(decoded.get(), decoded.get() + byteCount);
         levels.push_back(std::move(base));
+    }
+    if (options.opaqueBorderColor && recoverOpaqueMatte(levels.front(), *options.opaqueBorderColor)) {
+        levels.resize(1); // Rebuild any cached mips from the recovered alpha, rather than the opaque export.
+        cooked = false;
     }
     if (options.flipVertically) {
         for (auto& mip : levels) {

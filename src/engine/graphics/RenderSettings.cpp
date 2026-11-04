@@ -4,6 +4,9 @@
 
 namespace engine::graphics {
 void RenderSettings::validate() const {
+    if (!std::isfinite(renderScale) || renderScale < .5f || renderScale > 1) {
+        throw std::invalid_argument("Render scale must be between 0.5 and 1");
+    }
     if (retroSize.width <= 0 || retroSize.height <= 0 || shadowMapSize <= 0) {
         throw std::invalid_argument("Retro and shadow target dimensions must be positive");
     }

@@ -13,7 +13,10 @@ class SceneRenderer {
     ~SceneRenderer();
     SceneRenderer(const SceneRenderer&) = delete;
     SceneRenderer& operator=(const SceneRenderer&) = delete;
-    void render(const Scene& scene, Size drawableSize);
+    // A per-view retro raster lets diegetic menus fit the window without changing the gameplay raster.
+    void render(const Scene& scene, Size drawableSize, Size retroRaster = {});
+    void setSettings(const RenderSettings& settings);
+    RenderSettings settings() const;
     void setMode(RenderMode mode);
     RenderMode mode() const;
     // Compatibility: these select/query the PSX style only.

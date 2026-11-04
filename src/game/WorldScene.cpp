@@ -74,6 +74,13 @@ WorldScene::WorldScene(const GameAssets& assets)
     sidewalkAccess_.reserve(32);
     scene_.pointLights.reserve(kMaxPointLights);
 }
+void WorldScene::setFoliageParticles(bool enabled) {
+    foliageParticles_ = enabled;
+    if (!enabled) {
+        liftedLeaves_.clear();
+        previousLeafTime_ = -1;
+    }
+}
 const Scene& WorldScene::build(float playerX, float roadScroll, float gameTime, std::span<const Entity> entities,
                                std::span<const CollectEffect> effects, float effectRemainder, float nightBlend,
                                float playerSpeed, float cameraBlend, float aspect) {
@@ -124,7 +131,8 @@ const Scene& WorldScene::build(float playerX, float roadScroll, float gameTime, 
     addBuildings(roadScroll);
     addSidewalk(roadScroll);
     addParks(roadScroll);
-    addLeaves(playerX, roadScroll);
+    if (foliageParticles_)
+        addLeaves(playerX, roadScroll);
     player_.update(playerX, roadScroll + std::max(playerSpeed, 0.f) * effectRemainder, gameTime, playerSpeed);
     const auto& pose = player_.pose();
     const auto anchor = player_.anchor();

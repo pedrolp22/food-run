@@ -4,6 +4,8 @@ A C++20 lane runner with directional lighting, geometry shadows, and an optional
 
 The main menu places the cat and a tilted, 3D-lettered sign in a low, upward-looking street view. The impatient cat taps
 one foot while browsing; the world remains still. Choosing Play restores the normal chase view and starts the simulation.
+Credits pairs DedThred, Lorenzzo, and rdhd with their pixel portraits. The portraits have extruded edges, a softly glossy
+front, and scene shadows. Click one to shake it; double-click to spin it once before it settles back in place.
 
 The player is the textured, rigged cat from `assets/models/gato/gato.gltf`, with a procedural run driven by movement
 speed, alternating arm and leg swings, wrist and knee motion, a swaying tail, torso follow-through and lane-change lean.
@@ -13,8 +15,9 @@ The `kPlayer*` animation settings in `GameConfig.h` control height, cadence and 
 
 ## Build and run
 
-Requires CMake 3.20+, a C++20 compiler, SDL2 development files, and an OpenGL 3.3 driver.
-GLAD and stb_image are included. No dependencies are downloaded during configuration.
+Requires CMake 3.20+, a C++20 compiler (GCC/Clang on Linux or MSVC/MinGW on Windows), and an OpenGL 3.3 driver.
+CMake uses an installed SDL2 package when available and builds a pinned static SDL2 release otherwise.
+GLAD and stb_image are included. The SDL fallback needs network access on its first configuration.
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -24,10 +27,27 @@ cmake --build build --target cook_textures
 ctest --test-dir build --output-on-failure
 ```
 
-Controls: **A/D** or **Left/Right** change lanes, **G** toggles PSX rendering, **F** toggles distance fog,
-**H** toggles dithered shadow transparency (visible in PSX mode), **R** restarts, **Esc** exits.
-Pressing **G** again returns to normal; the window title shows the mode and enabled PSX fog/shadow effects.
-Both preferences survive restarting and mode switches; fog and dithered shadows apply only in PSX mode.
+On Windows, use the same configure/build commands from a Visual Studio developer terminal or CLion. With a
+multi-configuration generator, run `cmake --build build --config Release` and start `build/Release/subway.exe`.
+CMake stages a shared SDL2 DLL beside the executable when needed. `cmake --install build --config Release --prefix dist`
+creates a portable game folder with the executable, assets, and any required SDL2 DLL.
+
+Controls: **A/D** or **Left/Right** change lanes, **R** restarts, and **Esc** exits during play.
+Menus use **W/S** or **Up/Down** to select, **Left/Right** to adjust, **Enter/Space** to activate,
+and **Esc/Backspace** to go back. The mouse wheel scrolls the selection; mouse hover/click and controller D-pad/A/B
+are also supported. Options shows all settings together on one page:
+
+- Quality presets, render scale, anti-aliasing, and VSync.
+- Shadow quality, ambient occlusion, and reflection quality.
+- Material detail and ambient foliage particles.
+- An **Extra** section at the bottom with Retro mode, shadow dithering, and distance fog.
+
+Changes apply immediately and save to `game.cfg` in the main game folder beside `assets`. Development builds use the
+repository's asset folder; installed builds find `assets` and `game.cfg` next to the executable, independently of the
+working directory. Missing or invalid settings use defaults; unrecognized keys are ignored. Preferences survive restarts.
+Retro mode applies to the menu and gameplay. The menu uses a low-resolution raster fitted to the window so the 3D
+lettering stays visible and mouse hit areas line up in portrait and landscape layouts.
+
 PSX uses restrained vertex snapping and affine texture wobble, nearest base-level texels, Gouraud lighting, and
 5-bit RGB with the original signed dither pattern applied selectively to color/shading transitions.
 Sprites, their outlines and glow effects retain 5-bit color without the dither pattern.
@@ -36,12 +56,12 @@ Sidewalks use nearest mip texels with gradual distance transitions to reduce gra
 Shadow edges use an ordered mix of lit and shaded pixels, blending the two colors through the shadow transition.
 The shadow pattern follows each surface and fades when its cells become subpixel, reducing shimmer during movement.
 The optional Saturn-inspired shadow effect uses a fixed native-pixel checkerboard across the whole shadow, exposing the
-lit surface in alternate pixels. The game enables it initially; **H** toggles it during play.
+lit surface in alternate pixels. It can be enabled in the Extra section of Options.
 Optional distance fog gradually fades far street geometry toward the regular sky horizon. It preserves the game's bright
 sky, cloud contrast and colorful material reflections, with a gentle linear fade that keeps nearby action clear.
 Additive collectible effects fade with distance too.
 The fog uses eight-bit vertex depth cues and the existing selective RGB555 shade dithering, with no animated noise phase.
-It is enabled initially in the game; **F** toggles it during play.
+It is enabled initially and can be changed in the Extra section of Options.
 PSX uses a 240 × 320 portrait raster, configurable in `GameConfig.h`.
 The game camera has a subtle fisheye lens, adjustable with `kCameraFisheyeStrength` (0 disables it); menu text stays
 undistorted over the camera view.
@@ -210,7 +230,7 @@ live world reflections of moving geometry, reflection blur/toggles and cubemap r
 player gait/lane changes/freeze/restart, rigid ear attachments, independent skeletal poses and animated shadow/reflection geometry,
 collectible rotation and visibility through a full turn, contour ripple motion/fading/occlusion,
 immediate collection pops with matching poses and smooth fading after game over,
-and the application loop with lane changes, restart, retro toggling, and exit:
+and the application loop with menu settings, credits, lane changes, restart, and exit:
 
 ```sh
 cmake -S . -B build -DSUBWAY_ENABLE_GRAPHICS_TESTS=ON -DSUBWAY_BUILD_EXAMPLES=ON

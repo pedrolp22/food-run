@@ -99,7 +99,8 @@ struct SceneRenderer::Impl {
 
     explicit Impl(RenderSettings config)
         : settings(config), retro(config.retroSize, RenderTarget::Kind::ColorDepthAlpha),
-          shadow({config.shadowMapSize, config.shadowMapSize}, RenderTarget::Kind::Shadow), planarReflections(config) {
+          shadow({config.shadows ? config.shadowMapSize : 1, config.shadows ? config.shadowMapSize : 1},
+                 RenderTarget::Kind::Shadow), planarReflections(config) {
         // The supplied panorama need not have matching left/right edges. Its
         // mirrored horizontal wrap joins its edges; the horizon/pole stay clamped.
         // Keep the sampler's nearest-neighbor filtering and use only the source level.
@@ -276,7 +277,7 @@ struct SceneRenderer::Impl {
     template <class Program> void materialMaps(const Program& p, const MaterialTextures& maps) const {
         const auto& u = p.maps;
         const auto bind = [&](int location, int present, int maxLod, const Texture* image, int unit) {
-            const bool enabled = image && image->id();
+            const bool enabled = image && image->id() && (settings.materialDetail || unit == 2 || unit == 5);
             texture(location, enabled ? image->id() : 0, unit);
             state.bindSampler(unit,
                               enabled && psx() ? (image->repeats() ? materialRepeat.id() : materialClamp.id()) : 0);
@@ -721,7 +722,7 @@ struct SceneRenderer::Impl {
         }
     }
     void drawParticles(const Scene& world, const Scene& camera) const {
-        if (world.particles.empty()) {
+        if (!settings.foliageParticles || world.particles.empty()) {
             return;
         }
         orderedParticles.clear();
@@ -944,6 +945,8 @@ struct SceneRenderer::Impl {
                         renderSize.height * fit / drawable.height * 2);
         state.uniform1f(p.lensStrength, lensStrength);
         state.uniform1f(p.lensAspect, static_cast<float>(renderSize.width) / renderSize.height);
+        if constexpr (requires { p.antiAliasing; })
+            state.uniform1i(p.antiAliasing, settings.antiAliasing);
         state.uniform1i(p.aoEnabled, settings.screenSpaceAmbientOcclusion && depthTexture != 0);
         state.uniform3f(p.aoCamera, camera.nearPlane, camera.farPlane,
                         std::tan(radians(camera.verticalFov) * 0.5f));
@@ -956,7 +959,11 @@ struct SceneRenderer::Impl {
         glEnable(GL_DEPTH_TEST);
         glEnable(GL_BLEND);
     }
-    void render(const Scene& scene, Size drawable) {
+    void render(const Scene& scene, Size drawable, Size retroRaster) {
+        if (retroRaster.width == 0 && retroRaster.height == 0)
+            retroRaster = settings.retroSize;
+        if (retroRaster.width <= 0 || retroRaster.height <= 0)
+            throw std::invalid_argument("Retro raster dimensions must be positive");
         state.reset();
         state.activeTexture(GL_TEXTURE0);
         cloudUniformsReady = {};
@@ -965,12 +972,17 @@ struct SceneRenderer::Impl {
         }
         const float lensStrength =
             !std::isfinite(scene.camera.fisheyeStrength) ? 0.0f : std::clamp(scene.camera.fisheyeStrength, 0.0f, 0.25f);
-        const bool cameraPass = mode == RenderMode::Normal && (lensStrength > 0 || settings.screenSpaceAmbientOcclusion);
-        if (cameraPass && (!cameraTarget || cameraTarget->size().width != drawable.width ||
-                           cameraTarget->size().height != drawable.height)) {
-            cameraTarget = std::make_unique<RenderTarget>(drawable, RenderTarget::Kind::ColorDepth);
+        const Size scaled{std::max(1, static_cast<int>(std::lround(drawable.width * settings.renderScale))),
+                          std::max(1, static_cast<int>(std::lround(drawable.height * settings.renderScale)))};
+        const bool cameraPass = mode == RenderMode::Normal &&
+            (lensStrength > 0 || settings.screenSpaceAmbientOcclusion || settings.antiAliasing || settings.renderScale < 1);
+        if (cameraPass && (!cameraTarget || cameraTarget->size().width != scaled.width ||
+                           cameraTarget->size().height != scaled.height)) {
+            cameraTarget = std::make_unique<RenderTarget>(scaled, RenderTarget::Kind::ColorDepth);
         }
-        renderSize = psx() ? settings.retroSize : drawable;
+        if (psx() && (retro.size().width != retroRaster.width || retro.size().height != retroRaster.height))
+            retro = RenderTarget(retroRaster, RenderTarget::Kind::ColorDepthAlpha);
+        renderSize = psx() ? retroRaster : scaled;
         viewProjection = scene.camera.viewProjection(static_cast<float>(renderSize.width) / renderSize.height);
         lightProjection = scene.light.viewProjection();
         visibility.prepare(scene);
@@ -1030,7 +1042,7 @@ struct SceneRenderer::Impl {
         glEnable(GL_POLYGON_OFFSET_FILL);
         glPolygonOffset(1.5f, 2.0f);
         glClear(GL_DEPTH_BUFFER_BIT);
-        for (std::size_t i = 0; i < scene.objects.size(); ++i) {
+        for (std::size_t i = 0; settings.shadows && i < scene.objects.size(); ++i) {
             // Sprite meshes can include authored extrusion beyond their unit quad.
             if (std::holds_alternative<Sprite>(scene.objects[i]) || visibility.objectVisible(i)) {
                 std::visit([this](const auto& item) { cast(item); }, scene.objects[i]);
@@ -1117,8 +1129,23 @@ struct SceneRenderer::Impl {
 };
 SceneRenderer::SceneRenderer(RenderSettings settings) : impl_(std::make_unique<Impl>(checkedSettings(settings))) {}
 SceneRenderer::~SceneRenderer() = default;
-void SceneRenderer::render(const Scene& scene, Size drawable) {
-    impl_->render(scene, drawable);
+void SceneRenderer::render(const Scene& scene, Size drawable, Size retroRaster) {
+    impl_->render(scene, drawable, retroRaster);
+}
+void SceneRenderer::setSettings(const RenderSettings& settings) {
+    settings.validate();
+    const int shadowSize = settings.shadows ? settings.shadowMapSize : 1;
+    if (impl_->shadow.size().width != shadowSize)
+        impl_->shadow = RenderTarget({shadowSize, shadowSize}, RenderTarget::Kind::Shadow);
+    if (impl_->retro.size().width != settings.retroSize.width || impl_->retro.size().height != settings.retroSize.height)
+        impl_->retro = RenderTarget(settings.retroSize, RenderTarget::Kind::ColorDepthAlpha);
+    if (settings.worldReflectionMapSize != impl_->settings.worldReflectionMapSize)
+        impl_->reflectionMap.reset();
+    impl_->planarReflections.setSettings(settings);
+    impl_->settings = settings;
+}
+RenderSettings SceneRenderer::settings() const {
+    return impl_->settings;
 }
 void SceneRenderer::setMode(RenderMode mode) {
     impl_->mode = mode;

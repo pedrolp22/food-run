@@ -1,6 +1,6 @@
 #include "Game.h"
 #include "GameConfig.h"
-#include <SDL2/SDL.h>
+#include <SDL.h>
 #include <algorithm>
 #include <chrono>
 #include <iomanip>
@@ -90,6 +90,21 @@ void Game::handleEvents() {
                 if (hit >= 0)
                     menuSelection_ = hit;
             } else if (event.button.button == SDL_BUTTON_LEFT) {
+                const int icon = renderer_.developerIconHitTest(event.button.x, event.button.y);
+                if (event.type == SDL_MOUSEBUTTONDOWN) {
+                    developerIconDown_ = icon;
+                    if (icon >= 0) {
+                        menuMouseDown_ = -1;
+                        continue;
+                    }
+                } else if (developerIconDown_ >= 0) {
+                    if (icon == developerIconDown_) {
+                        renderer_.clickDeveloperIcon(icon, event.button.clicks >= 2 && lastDeveloperIconClick_ == icon);
+                        lastDeveloperIconClick_ = icon;
+                    }
+                    developerIconDown_ = -1;
+                    continue;
+                }
                 const int hit = renderer_.menuHitTest(event.button.x, event.button.y);
                 menuMouseHover_ = hit;
                 if (event.type == SDL_MOUSEBUTTONDOWN) {
@@ -109,17 +124,40 @@ void Game::handleEvents() {
         }
         if (inMenu_ && menuPendingActivation_ >= 0)
             continue;
-        if (event.type != SDL_KEYDOWN || event.key.repeat) {
+        if (inMenu_ && event.type == SDL_MOUSEWHEEL) {
+            const int count = renderer_.menuItemCount();
+            const int direction = event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -1 : 1;
+            const int steps = (event.wheel.y * direction) % count;
+            menuSelection_ = (menuSelection_ - steps + count) % count;
+            menuMouseDown_ = menuMouseHover_ = -1;
+            continue;
+        }
+        if (event.type == SDL_KEYDOWN && event.key.repeat) {
+            const auto key = event.key.keysym.sym;
+            if (!inMenu_ || (key != SDLK_UP && key != SDLK_DOWN && key != SDLK_w && key != SDLK_s))
+                continue;
+        }
+        if (event.type != SDL_KEYDOWN) {
             if (inMenu_ && event.type == SDL_CONTROLLERBUTTONDOWN) {
+                const int count = renderer_.menuItemCount();
                 switch (event.cbutton.button) {
                 case SDL_CONTROLLER_BUTTON_DPAD_UP:
-                    menuSelection_ = (menuSelection_ + 3) % 4;
+                    menuSelection_ = (menuSelection_ + count - 1) % count;
                     break;
                 case SDL_CONTROLLER_BUTTON_DPAD_DOWN:
-                    menuSelection_ = (menuSelection_ + 1) % 4;
+                    menuSelection_ = (menuSelection_ + 1) % count;
+                    break;
+                case SDL_CONTROLLER_BUTTON_DPAD_LEFT:
+                    renderer_.adjustMenuItem(menuSelection_, -1);
+                    break;
+                case SDL_CONTROLLER_BUTTON_DPAD_RIGHT:
+                    renderer_.adjustMenuItem(menuSelection_, 1);
                     break;
                 case SDL_CONTROLLER_BUTTON_A:
                     activateMenuSelection();
+                    break;
+                case SDL_CONTROLLER_BUTTON_B:
+                    backMenu();
                     break;
                 default:
                     break;
@@ -131,21 +169,34 @@ void Game::handleEvents() {
             continue;
         }
         if (inMenu_) {
+            const int count = renderer_.menuItemCount();
             switch (event.key.keysym.sym) {
             case SDLK_UP:
             case SDLK_w:
-                menuSelection_ = (menuSelection_ + 3) % 4;
+                menuSelection_ = (menuSelection_ + count - 1) % count;
                 break;
             case SDLK_DOWN:
             case SDLK_s:
-                menuSelection_ = (menuSelection_ + 1) % 4;
+                menuSelection_ = (menuSelection_ + 1) % count;
                 break;
             case SDLK_RETURN:
             case SDLK_SPACE:
                 activateMenuSelection();
                 break;
+            case SDLK_LEFT:
+            case SDLK_a:
+                renderer_.adjustMenuItem(menuSelection_, -1);
+                break;
+            case SDLK_RIGHT:
+            case SDLK_d:
+                renderer_.adjustMenuItem(menuSelection_, 1);
+                break;
             case SDLK_ESCAPE:
-                running_ = false;
+                backMenu();
+                break;
+            case SDLK_BACKSPACE:
+                if (menuPage_ != Renderer::MenuPage::Main)
+                    backMenu();
                 break;
             default:
                 break;
@@ -167,31 +218,47 @@ void Game::handleEvents() {
         case SDLK_r:
             resetGame();
             break;
-        case SDLK_g:
-            renderer_.toggleRetroMode();
-            updateWindowTitle();
-            break;
-        case SDLK_f:
-            renderer_.toggleDistanceFog();
-            updateWindowTitle();
-            break;
-        case SDLK_h:
-            renderer_.toggleDitheredShadows();
-            updateWindowTitle();
-            break;
         default:
             break;
         }
     }
 }
+void Game::showMenuPage(Renderer::MenuPage page, int selection) {
+    menuPage_ = page;
+    menuSelection_ = selection;
+    menuMouseDown_ = -1;
+    menuMouseHover_ = -1;
+    developerIconDown_ = -1;
+    lastDeveloperIconClick_ = -1;
+    menuPendingActivation_ = -1;
+    renderer_.setMenuPage(page, selection);
+}
+void Game::backMenu() {
+    using Page = Renderer::MenuPage;
+    switch (menuPage_) {
+    case Page::Main: running_ = false; break;
+    case Page::Credits: showMenuPage(Page::Main, 2); break;
+    case Page::Options: showMenuPage(Page::Main, 1); break;
+    }
+}
 void Game::activateMenuSelection() {
-    if (menuSelection_ == 0) {
-        resetGame();
-        cameraTransitionElapsed_ = 0;
-        cameraTransitionActive_ = true;
-        inMenu_ = false;
-    } else if (menuSelection_ == 3) {
-        running_ = false;
+    using Page = Renderer::MenuPage;
+    if (renderer_.adjustMenuItem(menuSelection_))
+        return;
+    if (menuPage_ == Page::Main) {
+        switch (menuSelection_) {
+        case 0:
+            resetGame();
+            cameraTransitionElapsed_ = 0;
+            cameraTransitionActive_ = true;
+            inMenu_ = false;
+            break;
+        case 1: showMenuPage(Page::Options); break;
+        case 2: showMenuPage(Page::Credits); break;
+        case 3: running_ = false; break;
+        }
+    } else {
+        backMenu();
     }
 }
 void Game::resetGame() {
