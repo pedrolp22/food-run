@@ -10,6 +10,7 @@ struct WindowSettings {
     graphics::Size size = {1280, 720};
     bool visible = true;
     bool vsync = true;
+    bool borderless = false;
 };
 // Owns one SDL video reference and its GL context. Keep it alive until all GPU resources are destroyed.
 class Window {
@@ -22,6 +23,8 @@ class Window {
     void swap() const;
     void setTitle(const std::string& title) const;
     void setSize(graphics::Size size) const;
+    bool setBorderless(bool enabled) const;
+    bool borderless() const;
     bool setVsync(bool enabled) const;
     bool vsync() const;
     graphics::Size drawableSize() const;

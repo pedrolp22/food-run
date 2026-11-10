@@ -1,4 +1,4 @@
-# Subway Money
+# Food Run
 
 A C++20 lane runner with directional lighting, geometry shadows, and an optional retro renderer.
 
@@ -23,16 +23,16 @@ GLAD and stb_image are included. The SDL fallback needs network access on its fi
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel
 cmake --build build --target cook_textures
-./build/subway
+./build/foodrun
 ctest --test-dir build --output-on-failure
 ```
 
 On Windows, use the same configure/build commands from a Visual Studio developer terminal or CLion. With a
-multi-configuration generator, run `cmake --build build --config Release` and start `build/Release/subway.exe`.
+multi-configuration generator, run `cmake --build build --config Release` and start `build/Release/foodrun.exe`.
 CMake stages a shared SDL2 DLL beside the executable when needed. `cmake --install build --config Release --prefix dist`
 creates a portable game folder with the executable, assets, and any required SDL2 DLL.
 
-Controls: **A/D** or **Left/Right** change lanes, **R** restarts, and **Esc** exits during play.
+Controls: **A/D** or **Left/Right** change lanes, and **Esc** exits during play.
 Menus use **W/S** or **Up/Down** to select, **Left/Right** to adjust, **Enter/Space** to activate,
 and **Esc/Backspace** to go back. The mouse wheel scrolls the selection; mouse hover/click and controller D-pad/A/B
 are also supported. Options shows all settings together on one page:
@@ -201,11 +201,11 @@ Shaders are editable files in `shaders/`, embedded into the graphics library dur
 | `subway::graphics` | Scene commands, lighting, shadows, retro presentation, GPU resources | A current OpenGL context |
 | `subway::platform` | SDL window and OpenGL context ownership | SDL2 |
 | `subway::gameplay` | Game state, collisions, seeded simulation | None |
-| `subway::world` | Subway assets and procedural scene generation | Graphics resources |
+| `subway::world` | Food Run assets and procedural scene generation | Graphics resources |
 | `subway::application` | Input, timing, window title, game renderer facade | All game components |
 
 `include/Renderer.h` is the small game-facing facade. The reusable API is
-`include/engine/graphics/SceneRenderer.h`; it accepts scene data and does not know about lanes, collectibles, or Subway assets.
+`include/engine/graphics/SceneRenderer.h`; it accepts scene data and does not know about lanes, collectibles, or Food Run assets.
 See [architecture and extension guide](docs/architecture.md) for ownership, rendering contracts, and migration notes.
 
 ## Tests and examples

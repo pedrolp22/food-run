@@ -18,10 +18,10 @@ class Game {
   private:
     void handleEvents();
     void resetGame();
-    void updateWindowTitle();
     void activateMenuSelection();
     void showMenuPage(Renderer::MenuPage page, int selection = 0);
     void backMenu();
+    float controlsHelpAlpha() const;
     Renderer renderer_;
     game::Simulation simulation_;
     engine::time::FixedStep clock_;
@@ -38,5 +38,6 @@ class Game {
     int menuPendingActivation_ = -1;
     float menuClickRemaining_ = 0;
     _SDL_GameController* controller_ = nullptr;
-    float titleUpdateTimer_ = 0;
+    bool controlsHelpShown_ = false;
+    float controlsHelpElapsed_ = 0;
 };

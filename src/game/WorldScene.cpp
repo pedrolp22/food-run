@@ -81,6 +81,9 @@ void WorldScene::setFoliageParticles(bool enabled) {
         previousLeafTime_ = -1;
     }
 }
+void WorldScene::setOverlayObjects(std::span<const DrawCommand> objects) {
+    scene_.overlayObjects.assign(objects.begin(), objects.end());
+}
 const Scene& WorldScene::build(float playerX, float roadScroll, float gameTime, std::span<const Entity> entities,
                                std::span<const CollectEffect> effects, float effectRemainder, float nightBlend,
                                float playerSpeed, float cameraBlend, float aspect) {
@@ -121,6 +124,7 @@ const Scene& WorldScene::build(float playerX, float roadScroll, float gameTime, 
                                std::lerp(scene_.sky.dusk.cloudTint.b, kNightLightColor[2], t)};
     }
     scene_.objects.clear();
+    scene_.overlayObjects.clear();
     scene_.effects.clear();
     scene_.particles.clear();
     trees_.clear();

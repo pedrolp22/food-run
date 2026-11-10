@@ -574,7 +574,8 @@ struct SceneRenderer::Impl {
                 state.uniform3f(p.color, material.baseColor[0], material.baseColor[1], material.baseColor[2]);
                 state.uniform1i(p.hasTexture, material.texture.id() != 0);
                 state.uniform1f(p.alphaCutoff, material.alphaCutoff);
-                state.uniform1f(p.baseAlpha, material.baseColor[3]);
+                const float opacity = std::isfinite(command.opacity) ? std::clamp(command.opacity, 0.0f, 1.0f) : 0;
+                state.uniform1f(p.baseAlpha, material.baseColor[3] * opacity);
                 state.uniform1i(p.doubleSided, material.doubleSided);
                 surfaceTexture(p, material.texture);
                 primitive.mesh.draw();
@@ -594,7 +595,8 @@ struct SceneRenderer::Impl {
             const auto& material = primitive.material;
             state.uniform1f(p.hasTexture, material.texture.id() != 0);
             state.uniform1f(p.alphaCutoff, material.alphaCutoff);
-            state.uniform1f(p.baseAlpha, material.baseColor[3]);
+            const float opacity = std::isfinite(command.opacity) ? std::clamp(command.opacity, 0.0f, 1.0f) : 0;
+            state.uniform1f(p.baseAlpha, material.baseColor[3] * opacity);
             state.uniform1i(p.doubleSided, material.doubleSided);
             state.uniform3f(p.baseColor, material.baseColor[0], material.baseColor[1], material.baseColor[2]);
             surfaceTexture(p, material.texture);
@@ -929,6 +931,26 @@ struct SceneRenderer::Impl {
         glDepthMask(GL_TRUE);
         glEnable(GL_DEPTH_TEST);
     }
+    void drawOverlayObjects(const Scene& scene, Size drawable) {
+        if (scene.overlayObjects.empty())
+            return;
+        const Mat4 savedViewProjection = viewProjection;
+        const float aspect = static_cast<float>(renderSize.width) / renderSize.height;
+        const float fit = std::min(static_cast<float>(drawable.width) / renderSize.width,
+                                   static_cast<float>(drawable.height) / renderSize.height);
+        const float width = renderSize.width * fit / drawable.width;
+        const float height = renderSize.height * fit / drawable.height;
+        viewProjection = multiply(scale({width, height, 1}), orthographic(aspect, 1, -1, 1));
+        glDisable(GL_DEPTH_TEST);
+        glDepthMask(GL_FALSE);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        for (const auto& item : scene.overlayObjects)
+            std::visit([this, &scene](const auto& command) { draw(command, scene); }, item);
+        glDepthMask(GL_TRUE);
+        glEnable(GL_DEPTH_TEST);
+        viewProjection = savedViewProjection;
+    }
     template <class Program>
     void present(Size drawable, const Program& p, unsigned int source, unsigned int depthTexture,
                  const Camera& camera, float lensStrength) const {
@@ -1098,7 +1120,8 @@ struct SceneRenderer::Impl {
             present(drawable, programs.present, cameraTarget->texture(), cameraTarget->depthTexture(), scene.camera,
                     lensStrength);
         }
-        // Composite UI over the completed game image, after retro/lens effects.
+        // Composite screen-space lettering and UI after retro/lens effects.
+        drawOverlayObjects(scene, drawable);
         menu(scene.menu, drawable);
         state.activeTexture(GL_TEXTURE0);
         state.bindTexture(GL_TEXTURE_2D, 0);

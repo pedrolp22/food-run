@@ -153,6 +153,7 @@ struct ModelInstance {
     bool pbrSurface = false;                           // Use each primitive's imported material factors.
     std::optional<SurfaceMaterial> materialOverride{}; // Optional finish override for this instance only.
     float emissiveScale = 1;                 // PBR emission multiplier; zero switches off the imported luminous texels.
+    float opacity = 1; // Multiplies material alpha for screen-space fades.
     const assets::ModelPose* pose = nullptr; // Borrowed per-instance pose; null selects the model's bind pose.
 };
 struct SpriteRipple {
@@ -190,6 +191,7 @@ struct Scene {
     MenuOverlay menu;
     float time = 0;
     std::vector<DrawCommand> objects;
+    std::vector<DrawCommand> overlayObjects; // Screen-space models and sprites drawn over the completed frame.
     std::vector<EffectCommand> effects;                  // Additive, depth-tested, no depth writes or shadow casting.
     std::optional<math::Vec3> reflectionProbePosition{}; // Empty captures the world at the camera position.
     std::vector<Quad> particles; // Alpha-blended surfaces, sorted per camera; no depth writes or shadow casting.

@@ -27,8 +27,9 @@ void resolveCollisions(GameState& state) {
             continue;
         case EntityType::SlowCollectible:
             state.purpleStreak += 1;
+            state.health = std::max(0, state.health - 1);
             state.speed = std::max(kMinSpeed, state.speed - 1.8f);
-            if (state.purpleStreak >= 3) {
+            if (state.health == 0) {
                 state.gameOver = true;
             }
             state.collectEffects.push_back(
@@ -36,6 +37,7 @@ void resolveCollisions(GameState& state) {
             break;
         case EntityType::ScoreCollectible:
             state.score += 100;
+            state.healthyFoods += 1;
             state.health = std::min(kMaxHealth, state.health + 1);
             state.purpleStreak = std::max(0, state.purpleStreak - 1);
             state.speed = std::min(kMaxSpeed, state.speed + 1.8f);

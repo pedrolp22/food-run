@@ -1,5 +1,6 @@
 #pragma once
 
+#include "GameConfig.h"
 #include "engine/graphics/RenderMode.h"
 #include "game/Entities.h"
 #include "game/GraphicsSettings.h"
@@ -11,7 +12,7 @@
 // Game-facing facade. Reusable rendering lives in engine/graphics/SceneRenderer.h.
 class Renderer {
   public:
-    enum class MenuPage { Main, Credits, Options };
+    enum class MenuPage { Main, Credits, Options, GameOver };
     using EntityType = game::EntityType;
     using Entity = game::Entity;
     using CollectEffect = game::CollectEffect;
@@ -34,10 +35,11 @@ class Renderer {
     int menuHitTest(int x, int y) const;
     int developerIconHitTest(int x, int y) const;
     void clickDeveloperIcon(int icon, bool doubleClick = false) const;
-    void renderMenu(float time, int selection, int pressed = -1) const;
+    void renderMenu(float time, int selection, int pressed = -1, int score = 0, int healthyFoods = 0) const;
     void render(float playerX, float roadScroll, float gameTime, int score, std::span<const Entity> entities,
                 std::span<const CollectEffect> collectEffects, float effectRemainder = 0, float nightBlend = 0,
-                float playerSpeed = 0, float cameraBlend = 1) const;
+                float playerSpeed = 0, float cameraBlend = 1, int health = GameConfig::kMaxHealth,
+                float controlsHelpAlpha = 0, int healthyFoods = 0) const;
 
   private:
     struct Impl;

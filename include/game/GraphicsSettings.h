@@ -7,6 +7,7 @@
 namespace game {
 enum class GraphicsQuality { Off, Low, Medium, High };
 enum class GraphicsPreset { Low, Medium, High, Custom };
+enum class DisplayMode { Windowed, Borderless };
 
 // User preferences, independent of the window and GPU resources.
 struct GraphicsSettings {
@@ -18,6 +19,7 @@ struct GraphicsSettings {
     bool foliageParticles = true;
     bool antiAliasing = false;
     bool vsync = true;
+    DisplayMode displayMode = DisplayMode::Windowed;
     bool retroMode = false;
     bool ditheredShadows = GameConfig::kPsxDitheredShadows;
     bool distanceFog = GameConfig::kPsxDistanceFog;

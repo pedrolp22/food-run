@@ -30,6 +30,9 @@ enum class TextureId {
     Leaf,
     Moon,
     ConcreteTiles,
+    HeartRed,
+    HeartLost,
+    PointsStar,
     Count
 };
 enum class ModelId { Cone, Barrier, TrashCan, Bench, Tree, StreetLamp, PlayerCat, Count };

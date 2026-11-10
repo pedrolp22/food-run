@@ -121,6 +121,10 @@ GraphicsSettings GraphicsSettings::load(const std::filesystem::path& path) {
     boolean("foliage_particles", result.foliageParticles);
     boolean("anti_aliasing", result.antiAliasing);
     boolean("vsync", result.vsync);
+    if (values["display_mode"] == "borderless")
+        result.displayMode = DisplayMode::Borderless;
+    else if (values["display_mode"] == "windowed")
+        result.displayMode = DisplayMode::Windowed;
     boolean("retro_mode", result.retroMode);
     boolean("dithered_shadows", result.ditheredShadows);
     boolean("distance_fog", result.distanceFog);
@@ -133,7 +137,7 @@ bool GraphicsSettings::save(const std::filesystem::path& path) const {
     {
         std::ofstream output(temporary, std::ios::trunc);
         constexpr std::array presets = {"low", "medium", "high", "custom"};
-        output << std::boolalpha << "# Subway Money graphics settings\n"
+        output << std::boolalpha << "# Food Run graphics settings\n"
                << "quality = " << presets[static_cast<int>(preset())] << '\n'
                << "render_scale = " << renderScale << '\n'
                << "shadows = " << qualityName(shadows) << '\n'
@@ -143,6 +147,7 @@ bool GraphicsSettings::save(const std::filesystem::path& path) const {
                << "foliage_particles = " << foliageParticles << '\n'
                << "anti_aliasing = " << antiAliasing << '\n'
                << "vsync = " << vsync << '\n'
+               << "display_mode = " << (displayMode == DisplayMode::Borderless ? "borderless" : "windowed") << '\n'
                << "retro_mode = " << retroMode << '\n'
                << "dithered_shadows = " << ditheredShadows << '\n'
                << "distance_fog = " << distanceFog << '\n';

@@ -4,7 +4,7 @@
 #include <array>
 
 namespace GameConfig {
-constexpr const char* kWindowTitle = "Teste";
+constexpr const char* kWindowTitle = "Food Run";
 
 constexpr int kLaneCount = 3;
 constexpr std::array<float, kLaneCount> kLanePositions = {-2.2f, 0.0f, 2.2f};

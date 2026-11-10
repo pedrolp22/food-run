@@ -39,7 +39,10 @@ constexpr std::array textures = {
     TextureSpec{TextureId::Grass, "textures/grassy/grass.png", true, true},
     TextureSpec{TextureId::Fence, "textures/grassy/spikedfence_decor.png", true, true},
     TextureSpec{TextureId::Leaf, "textures/grassy/leaf.png", false, true},
-    TextureSpec{TextureId::Moon, "textures/sky/moon.png", false}};
+    TextureSpec{TextureId::Moon, "textures/sky/moon.png", false},
+    TextureSpec{TextureId::HeartRed, "textures/ui/heart-red.png", false},
+    TextureSpec{TextureId::HeartLost, "textures/ui/heart-lost.png", false},
+    TextureSpec{TextureId::PointsStar, "textures/ui/points-star.png", false}};
 constexpr std::array models = {ModelSpec{ModelId::Cone, "traffic_cone/scene.gltf", 1.0f},
                                ModelSpec{ModelId::Barrier, "barrier/scene.gltf", 0.9f},
                                ModelSpec{ModelId::TrashCan, "trash_can/scene.gltf", 0.75f},

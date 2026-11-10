@@ -14,6 +14,7 @@ struct GameState {
     float roadScroll = 0;
     float time = 0;
     int score = 0;
+    int healthyFoods = 0;
     int health = GameConfig::kMaxHealth;
     int purpleStreak = 0;
     DayNightCycle dayNight;

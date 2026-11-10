@@ -101,6 +101,12 @@ constexpr std::array<std::string_view, 7> kMenuPercent = {
     "11001", "11010", "00010", "00100", "01000", "01011", "10011"};
 constexpr std::array<std::string_view, 7> kMenuColon = {
     "00000", "00100", "00100", "00000", "00100", "00100", "00000"};
+constexpr std::array<std::string_view, 7> kMenuExclamation = {
+    "00100", "00100", "00100", "00100", "00100", "00000", "00100"};
+constexpr std::array<std::string_view, 7> kMenuSlash = {
+    "00001", "00010", "00010", "00100", "01000", "01000", "10000"};
+constexpr std::array<std::string_view, 7> kMenuDash = {
+    "00000", "00000", "00000", "01110", "00000", "00000", "00000"};
 
 const std::array<std::string_view, 7>* menuGlyph(char character) {
     if (character >= 'A' && character <= 'Z')
@@ -111,6 +117,9 @@ const std::array<std::string_view, 7>* menuGlyph(char character) {
         return &kMenuDigits[character - '0'];
     switch (character) {
     case ':': return &kMenuColon;
+    case '!': return &kMenuExclamation;
+    case '/': return &kMenuSlash;
+    case '-': return &kMenuDash;
     case '<': return &kMenuLess;
     case '>': return &kMenuGreater;
     case '%': return &kMenuPercent;
@@ -218,6 +227,12 @@ ModelData makeMenuLettering(std::string_view label, float pixelSize) {
     return makeMenuLettering(std::span{&line, 1});
 }
 
+ModelData makeControlsHelpText() {
+    constexpr std::array lines = {MenuTextLine{"GAME CONTROLS", .009f, -.77f},
+                                  MenuTextLine{"Press <- / -> or A / D to move!", .0048f, -.875f}};
+    return makeMenuLettering(lines);
+}
+
 ModelData makeDeveloperIcon(const engine::assets::SpriteGeometry& geometry, const std::filesystem::path& path) {
     ModelData data;
     PrimitiveData front, sides;
@@ -265,7 +280,7 @@ ModelData makeMenuCursor() {
     return data;
 }
 enum class GraphicsControl {
-    None, Quality, RenderScale, AntiAliasing, Vsync, Shadows, Occlusion, Reflections, MaterialDetail,
+    None, DisplayMode, Quality, RenderScale, AntiAliasing, Vsync, Shadows, Occlusion, Reflections, MaterialDetail,
     FoliageParticles, RetroMode, DitheredShadows, DistanceFog
 };
 struct MenuItemDefinition {
@@ -276,7 +291,10 @@ std::span<const MenuItemDefinition> menuDefinitions(Renderer::MenuPage page) {
     static constexpr std::array main = {MenuItemDefinition{"PLAY"}, MenuItemDefinition{"OPTIONS"},
                                         MenuItemDefinition{"CREDITS"}, MenuItemDefinition{"EXIT"}};
     static constexpr std::array credits = {MenuItemDefinition{"BACK"}};
+    static constexpr std::array gameOver = {MenuItemDefinition{"Play Again"}, MenuItemDefinition{"Main Menu"},
+                                            MenuItemDefinition{"Exit"}};
     static constexpr std::array options = {
+        MenuItemDefinition{"Display mode", GraphicsControl::DisplayMode},
         MenuItemDefinition{"Quality", GraphicsControl::Quality},
         MenuItemDefinition{"Render scale", GraphicsControl::RenderScale},
         MenuItemDefinition{"Anti aliasing", GraphicsControl::AntiAliasing},
@@ -295,16 +313,24 @@ std::span<const MenuItemDefinition> menuDefinitions(Renderer::MenuPage page) {
     case Renderer::MenuPage::Main: return main;
     case Renderer::MenuPage::Credits: return credits;
     case Renderer::MenuPage::Options: return options;
+    case Renderer::MenuPage::GameOver: return gameOver;
     }
     return main;
 }
 std::string_view menuTitle(Renderer::MenuPage page) {
-    constexpr std::array titles = {"SUBWAY MONEY", "CREDITS", "OPTIONS"};
-    return titles[static_cast<int>(page)];
+    switch (page) {
+    case Renderer::MenuPage::Main: return "FOOD RUN";
+    case Renderer::MenuPage::Credits: return "CREDITS";
+    case Renderer::MenuPage::Options: return "OPTIONS";
+    case Renderer::MenuPage::GameOver: return "Game Over!";
+    }
+    return "FOOD RUN";
 }
-constexpr std::size_t kMenuItemCapacity = 13;
-constexpr std::size_t kExtraFirstItem = 9;
+constexpr std::size_t kMenuItemCapacity = 14;
+constexpr std::size_t kExtraFirstItem = 10;
 constexpr float kOptionPixelSize = .030f;
+constexpr float kMainHeaderPixelSize = .043f;
+constexpr float kGameOverHeaderPixelSize = .074f;
 constexpr float kOptionLeft = -1.73f;
 constexpr float kOptionRight = 1.73f;
 constexpr float kOptionRowStep = .32f;
@@ -330,6 +356,16 @@ struct Renderer::Impl {
     engine::graphics::Model creditsLettering;
     engine::graphics::Model extraHeading;
     engine::graphics::Model menuCursor;
+    engine::graphics::Model scoreText;
+    engine::graphics::Model fitFoodText;
+    engine::graphics::Model gameOverScoreText;
+    engine::graphics::Model gameOverFitFoodText;
+    engine::graphics::Model controlsHelpText;
+    std::string scoreTextValue;
+    std::string fitFoodTextValue;
+    std::string gameOverScoreTextValue;
+    std::string gameOverFitFoodTextValue;
+    std::vector<engine::graphics::DrawCommand> hudObjects;
     struct MenuItem {
         engine::graphics::Model label, value;
         std::string valueText;
@@ -354,13 +390,16 @@ struct Renderer::Impl {
     float previousMenuTime = -1;
 
     Impl(const std::filesystem::path& root, const std::filesystem::path& config, bool visible)
-        : window({.title = GameConfig::kWindowTitle, .size = {.width = 720, .height = 1280}, .visible = visible}),
+        : window({.title = GameConfig::kWindowTitle, .size = {.width = 720, .height = 1280}, .visible = visible,
+                  .borderless = game::GraphicsSettings::load(config).displayMode == game::DisplayMode::Borderless}),
           settingsFile(config), preferences(game::GraphicsSettings::load(config)), graphics(preferences.renderSettings()),
           assets(root, GameConfig::kMipmappedTextures), world(assets),
           menuPlayer(*assets.model(game::ModelId::PlayerCat).animationData()),
           creditsLettering(makeMenuLettering(kCreditsLines)), extraHeading(makeMenuLettering("EXTRA", .030f)),
           menuCursor(makeMenuCursor()),
           menuScene(world.build(0, 0, 0, {}, {})), drawable(window.drawableSize()) {
+        controlsHelpText = engine::graphics::Model(makeControlsHelpText());
+        hudObjects.reserve(5);
         window.setVsync(preferences.vsync);
         preferences.vsync = window.vsync();
         graphics.setRetroMode(preferences.retroMode);
@@ -407,6 +446,108 @@ struct Renderer::Impl {
         if (!preferences.save(settingsFile))
             std::cerr << "Could not save graphics settings to " << settingsFile << '\n';
     }
+    void updateScoreText(int score, int health, int healthyFoods, float controlsHelpAlpha) {
+        hudObjects.clear();
+        const float aspect = preferences.retroMode
+                                 ? static_cast<float>(GameConfig::kPsxInternalWidth) / GameConfig::kPsxInternalHeight
+                                 : drawable.height > 0 ? static_cast<float>(drawable.width) / drawable.height : 1;
+        constexpr float margin = .025f;
+        constexpr float heartSize = .09f;
+        constexpr float heartGap = .025f;
+        const float heartY = 1 - margin - heartSize * .5f;
+        health = std::clamp(health, 0, GameConfig::kMaxHealth);
+        for (int i = 0; i < GameConfig::kMaxHealth; ++i) {
+            const auto& texture = assets.texture(i < health ? game::TextureId::HeartRed : game::TextureId::HeartLost);
+            engine::graphics::Sprite heart;
+            heart.texture = &texture;
+            heart.aspect = texture.aspect();
+            heart.model = multiply(translation({-aspect + margin + heartSize * .5f + i * (heartSize + heartGap),
+                                                heartY, 0}), scale({heartSize * heart.aspect, heartSize, 1}));
+            hudObjects.emplace_back(heart);
+        }
+        const std::string text = "Score: " + std::to_string(score);
+        if (text != scoreTextValue) {
+            scoreText = engine::graphics::Model(makeMenuLettering(text, .012f));
+            scoreTextValue = text;
+        }
+        const std::string fitFood = "Fit Food: " + std::to_string(healthyFoods);
+        if (fitFood != fitFoodTextValue) {
+            fitFoodText = engine::graphics::Model(makeMenuLettering(fitFood, .012f));
+            fitFoodTextValue = fitFood;
+        }
+        constexpr float pixelSize = .012f;
+        constexpr float iconSize = .068f;
+        constexpr float iconGap = .018f;
+        const float textLeft = -aspect + margin + iconSize + iconGap;
+        const float scoreY = 1 - margin - heartSize - .025f - 3.5f * pixelSize;
+        const auto appendMetric = [&](const engine::graphics::Model& model, const std::string& label,
+                                      game::TextureId icon, float y) {
+            const auto& texture = assets.texture(icon);
+            engine::graphics::Sprite marker;
+            marker.texture = &texture;
+            marker.aspect = texture.aspect();
+            marker.model = multiply(translation({-aspect + margin + iconSize * .5f, y, 0}),
+                                    scale({iconSize * marker.aspect, iconSize, 1}));
+            hudObjects.emplace_back(marker);
+            engine::graphics::ModelInstance textModel;
+            textModel.model = &model;
+            textModel.pbrSurface = true;
+            textModel.transform = translation({textLeft + textHalfWidth(label, pixelSize), y, 0});
+            hudObjects.emplace_back(textModel);
+        };
+        appendMetric(scoreText, text, game::TextureId::PointsStar, scoreY);
+        appendMetric(fitFoodText, fitFood, game::TextureId::Salad, scoreY - .112f);
+        if (controlsHelpAlpha > 0) {
+            engine::graphics::ModelInstance help;
+            help.model = &controlsHelpText;
+            help.pbrSurface = true;
+            help.opacity = std::clamp(controlsHelpAlpha, 0.0f, 1.0f);
+            hudObjects.emplace_back(help);
+        }
+        world.setOverlayObjects(hudObjects);
+    }
+    void updateGameOverMetrics(int score, int healthyFoods) {
+        const bool gameOver = menuPage == Renderer::MenuPage::GameOver;
+        menuScene.overlayObjects.clear();
+        if (!gameOver) {
+            return;
+        }
+        const std::string text = "Score: " + std::to_string(score);
+        if (text != gameOverScoreTextValue) {
+            gameOverScoreText = engine::graphics::Model(makeMenuLettering(text, .013f));
+            gameOverScoreTextValue = text;
+        }
+        const std::string fitFood = "Fit Food: " + std::to_string(healthyFoods);
+        if (fitFood != gameOverFitFoodTextValue) {
+            gameOverFitFoodText = engine::graphics::Model(makeMenuLettering(fitFood, .013f));
+            gameOverFitFoodTextValue = fitFood;
+        }
+        constexpr float iconSize = .09f;
+        constexpr float gap = .022f;
+        // Keep the screen-space counters aligned with the Game Over menu column.
+        constexpr float metricsCenterX = .28f;
+        const auto appendMetric = [&](const engine::graphics::Model& model, const std::string& label,
+                                      game::TextureId icon, float y) {
+            constexpr float pixelSize = .013f;
+            const float textWidth = 2 * textHalfWidth(label, pixelSize);
+            const float totalWidth = iconSize + gap + textWidth;
+            const float left = metricsCenterX - totalWidth * .5f;
+            const auto& texture = assets.texture(icon);
+            engine::graphics::Sprite marker;
+            marker.texture = &texture;
+            marker.aspect = texture.aspect();
+            marker.model = multiply(translation({left + iconSize * .5f, y, 0}),
+                                    scale({iconSize * marker.aspect, iconSize, 1}));
+            menuScene.overlayObjects.emplace_back(marker);
+            engine::graphics::ModelInstance textModel;
+            textModel.model = &model;
+            textModel.pbrSurface = true;
+            textModel.transform = translation({left + iconSize + gap + textWidth * .5f, y, 0});
+            menuScene.overlayObjects.emplace_back(textModel);
+        };
+        appendMetric(gameOverScoreText, text, game::TextureId::PointsStar, .24f);
+        appendMetric(gameOverFitFoodText, fitFood, game::TextureId::Salad, .08f);
+    }
     float aspect() const {
         return drawable.height > 0 ? static_cast<float>(drawable.width) / drawable.height : 1.0f;
     }
@@ -425,7 +566,7 @@ struct Renderer::Impl {
         const auto raster = menuRaster();
         return static_cast<float>(raster.width) / raster.height;
     }
-    engine::math::Mat4 menuPanelTransform() const {
+    engine::math::Mat4 menuPanelTransform(float horizontalCenterOverride = -1.0f) const {
         using namespace engine::math;
         const auto& camera = menuScene.camera;
         const float distance = (camera.position.z - GameConfig::kPlayerZ) * .85f;
@@ -435,10 +576,14 @@ struct Renderer::Impl {
         const float halfHeight = distance * std::tan(radians(camera.verticalFov) * .5f);
         const float halfWidth = halfHeight * menuAspect();
         const bool options = menuPage == Renderer::MenuPage::Options;
-        const float panelHeight = options ? 5.5f : menuPage == Renderer::MenuPage::Main ? 3.5f : 4.2f;
+        const float panelHeight = options ? 6.0f : menuPage == Renderer::MenuPage::GameOver ? 6.0f :
+                                  menuPage == Renderer::MenuPage::Main ? 3.5f : 4.2f;
         const float size = std::min(halfWidth * (options ? .94f / 4.0f : .90f / 3.2f),
                                     halfHeight * 1.60f / panelHeight);
-        const Vec3 center{camera.position.x + forward.x * distance + right.x * halfWidth * (options ? .52f : .50f),
+        const float horizontalCenter = horizontalCenterOverride >= 0
+                                           ? horizontalCenterOverride
+                                           : menuPage == Renderer::MenuPage::GameOver ? .64f : options ? .52f : .50f;
+        const Vec3 center{camera.position.x + forward.x * distance + right.x * halfWidth * horizontalCenter,
                           camera.position.y + forward.y * distance + up.y * halfHeight * .04f,
                           camera.position.z + forward.z * distance + up.z * halfHeight * .04f};
         const float pitch = std::atan2(forward.y, -forward.z);
@@ -454,6 +599,8 @@ struct Renderer::Impl {
         constexpr std::array presetNames = {"Low", "Medium", "High", "Custom"};
         switch (control) {
         case GraphicsControl::Quality: return presetNames[static_cast<int>(preferences.preset())];
+        case GraphicsControl::DisplayMode:
+            return preferences.displayMode == game::DisplayMode::Borderless ? "Borderless" : "Windowed";
         case GraphicsControl::RenderScale: return std::to_string(preferences.renderScale) + "%";
         case GraphicsControl::AntiAliasing: return onOff(preferences.antiAliasing);
         case GraphicsControl::Vsync: return onOff(preferences.vsync);
@@ -486,7 +633,9 @@ struct Renderer::Impl {
         const bool main = menuPage == Renderer::MenuPage::Main;
         const bool credits = menuPage == Renderer::MenuPage::Credits;
         const bool options = menuPage == Renderer::MenuPage::Options;
-        title = engine::graphics::Model(makeMenuLettering(menuTitle(menuPage), main ? .043f : .058f));
+        const bool gameOver = menuPage == Renderer::MenuPage::GameOver;
+        const float titlePixelSize = main ? kMainHeaderPixelSize : gameOver ? kGameOverHeaderPixelSize : .058f;
+        title = engine::graphics::Model(makeMenuLettering(menuTitle(menuPage), titlePixelSize));
         instance(titleIndex).model = &title;
         instance(creditsIndex).model = credits ? &creditsLettering : nullptr;
         instance(extraIndex).model = options ? &extraHeading : nullptr;
@@ -505,11 +654,13 @@ struct Renderer::Impl {
                 continue;
             }
             const auto& label = definitions[i].label;
-            const float pixelSize = main ? .068f : credits ? kCreditsBackPixelSize : kOptionPixelSize;
+            const float pixelSize = main ? .068f : gameOver ? .048f : credits ? kCreditsBackPixelSize :
+                                    options && i == 0 ? .024f : kOptionPixelSize;
             item.label = engine::graphics::Model(makeMenuLettering(label, pixelSize));
             instance(item.labelIndex).model = &item.label;
             item.halfWidth = textHalfWidth(label, pixelSize);
-            item.centerY = main ? .662f - .66f * i : credits ? kCreditsBackY : optionRowY(i);
+            item.centerY = main ? .662f - .66f * i : gameOver ? -.35f - .68f * i :
+                           credits ? kCreditsBackY : optionRowY(i);
         }
         refreshMenuValues();
     }
@@ -524,6 +675,14 @@ struct Renderer::Impl {
         };
         switch (definitions[selected].control) {
         case GraphicsControl::None: return false;
+        case GraphicsControl::DisplayMode: {
+            const auto mode = preferences.displayMode == game::DisplayMode::Windowed
+                                  ? game::DisplayMode::Borderless : game::DisplayMode::Windowed;
+            if (!window.setBorderless(mode == game::DisplayMode::Borderless))
+                return false;
+            preferences.displayMode = mode;
+            break;
+        }
         case GraphicsControl::Quality:
             preferences.applyPreset(static_cast<GraphicsPreset>(cycle(
                 preferences.preset() == GraphicsPreset::Custom ? 2 : static_cast<int>(preferences.preset()), 3)));
@@ -566,8 +725,11 @@ struct Renderer::Impl {
         const float dt = previousMenuTime < 0 ? 1.0f : std::clamp(time - previousMenuTime, 0.0f, .1f);
         previousMenuTime = time;
         const bool options = menuPage == Renderer::MenuPage::Options;
-        instance(titleIndex).transform = multiply(panel, translation({0, options ? 2.28f : 1.6995f, 0}));
-        instance(creditsIndex).transform = panel;
+        const bool gameOver = menuPage == Renderer::MenuPage::GameOver;
+        const Mat4 titlePanel = gameOver ? menuPanelTransform(.50f) : panel;
+        instance(titleIndex).transform = multiply(titlePanel,
+            translation({0, options || gameOver ? 2.28f : 1.6995f, 0}));
+        instance(creditsIndex).transform = multiply(panel, translation({0, gameOver ? .94f : 0, 0}));
         for (std::size_t i = 0; i < developerIcons.size(); ++i) {
             auto& icon = developerIcons[i];
             if (menuPage == Renderer::MenuPage::Credits)
@@ -800,12 +962,14 @@ void Renderer::clickDeveloperIcon(int icon, bool doubleClick) const {
         icon < static_cast<int>(impl_->developerIcons.size()))
         impl_->developerIcons[icon].animation.click(doubleClick);
 }
-void Renderer::renderMenu(const float time, const int selection, const int pressed) const {
+void Renderer::renderMenu(const float time, const int selection, const int pressed, const int score,
+                          const int healthyFoods) const {
     if (!impl_)
         return;
     resizeViewport();
     if (impl_->drawable.width <= 0 || impl_->drawable.height <= 0)
         return;
+    impl_->updateGameOverMetrics(score, healthyFoods);
     impl_->menuScene.camera = game::menuCamera(impl_->menuAspect());
     impl_->updateMenuPlayer(time, selection, pressed);
     impl_->graphics.setRetroMode(impl_->preferences.retroMode);
@@ -813,15 +977,18 @@ void Renderer::renderMenu(const float time, const int selection, const int press
     impl_->window.swap();
 }
 void Renderer::render(const float playerX, const float roadScroll, const float gameTime,
-                      [[maybe_unused]] const int score, const std::span<const Entity> entities,
+                      const int score, const std::span<const Entity> entities,
                       const std::span<const CollectEffect> collectEffects, const float effectRemainder,
-                      const float nightBlend, const float playerSpeed, const float cameraBlend) const {
+                      const float nightBlend, const float playerSpeed, const float cameraBlend,
+                      const int health, const float controlsHelpAlpha, const int healthyFoods) const {
     if (!impl_)
         return;
     resizeViewport();
     if (impl_->drawable.width <= 0 || impl_->drawable.height <= 0)
         return;
-    impl_->graphics.render(impl_->world.build(playerX, roadScroll, gameTime, entities, collectEffects, effectRemainder,
-                                              nightBlend, playerSpeed, cameraBlend, impl_->aspect()), impl_->drawable);
+    const auto& scene = impl_->world.build(playerX, roadScroll, gameTime, entities, collectEffects, effectRemainder,
+                                           nightBlend, playerSpeed, cameraBlend, impl_->aspect());
+    impl_->updateScoreText(score, health, healthyFoods, controlsHelpAlpha);
+    impl_->graphics.render(scene, impl_->drawable);
     impl_->window.swap();
 }

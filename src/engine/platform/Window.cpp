@@ -32,6 +32,7 @@ Window::Window(const WindowSettings& settings) {
         window_ = SDL_CreateWindow(settings.title.c_str(), SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                                    settings.size.width, settings.size.height,
                                    SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE |
+                                       (settings.borderless ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0) |
                                        (settings.visible ? SDL_WINDOW_SHOWN : SDL_WINDOW_HIDDEN));
         requireSDL(window_ != nullptr, "Create window");
         context_ = SDL_GL_CreateContext(window_);
@@ -79,6 +80,12 @@ void Window::setSize(graphics::Size size) const {
         throw std::invalid_argument("Invalid window size");
     }
     SDL_SetWindowSize(window_, size.width, size.height);
+}
+bool Window::setBorderless(bool enabled) const {
+    return SDL_SetWindowFullscreen(window_, enabled ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0) == 0;
+}
+bool Window::borderless() const {
+    return (SDL_GetWindowFlags(window_) & SDL_WINDOW_FULLSCREEN_DESKTOP) == SDL_WINDOW_FULLSCREEN_DESKTOP;
 }
 graphics::Size Window::drawableSize() const {
     graphics::Size size;

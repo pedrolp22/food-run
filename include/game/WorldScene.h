@@ -18,6 +18,7 @@ class WorldScene {
   public:
     explicit WorldScene(const GameAssets& assets);
     void setFoliageParticles(bool enabled);
+    void setOverlayObjects(std::span<const engine::graphics::DrawCommand> objects);
     const engine::graphics::Scene& build(float playerX, float roadScroll, float gameTime,
                                          std::span<const Entity> entities, std::span<const CollectEffect> effects,
                                          float effectRemainder = 0, float nightBlend = 0, float playerSpeed = 0,
