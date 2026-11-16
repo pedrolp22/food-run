@@ -172,6 +172,7 @@ struct Sprite {
     const Mesh* profile = nullptr; // Optional extruded silhouette; null draws a flat sprite.
     float outlinePixels = 2;
     SpriteRipple ripple{};
+    float opacity = 1;
 };
 using DrawCommand = std::variant<Quad, Cube, ModelInstance, Sprite>;
 struct SpriteBurst {

@@ -575,6 +575,7 @@ struct SceneRenderer::Impl {
                 state.uniform1i(p.hasTexture, material.texture.id() != 0);
                 state.uniform1f(p.alphaCutoff, material.alphaCutoff);
                 const float opacity = std::isfinite(command.opacity) ? std::clamp(command.opacity, 0.0f, 1.0f) : 0;
+                state.uniform1f(p.alpha, opacity);
                 state.uniform1f(p.baseAlpha, material.baseColor[3] * opacity);
                 state.uniform1i(p.doubleSided, material.doubleSided);
                 surfaceTexture(p, material.texture);
@@ -622,6 +623,7 @@ struct SceneRenderer::Impl {
         state.uniform1f(p.spawnTime, command.spawnTime);
         color(p.rippleColor, command.rippleColor);
         state.uniform1f(p.aspect, command.aspect);
+        state.uniform1f(p.opacity, std::isfinite(command.opacity) ? std::clamp(command.opacity, 0.0f, 1.0f) : 0);
         surfaceTexture(p, *command.texture);
         if (psx()) {
             // Alpha marks dither eligibility in the retro target. Keep normal

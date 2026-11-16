@@ -99,6 +99,7 @@ struct SpriteProgram {
     int rippleColor;
     int aspect;
     int affine;
+    int opacity;
     SpriteProgram()
         : shader(shaders::sprite_vert, shaders::sprite_frag, "sprite",
                  std::string(shaders::fog_glsl) + std::string(shaders::texture_filter_glsl), shaders::vertex_snap_glsl),
@@ -109,7 +110,7 @@ struct SpriteProgram {
           fogRange(shader.uniform("uFogRange")), fogColor(shader.uniform("uFogColor")),
           texture(shader.uniform("uTexture")), time(shader.uniform("uTime")), spawnTime(shader.uniform("uSpawnTime")),
           rippleColor(shader.uniform("uRippleColor")), aspect(shader.uniform("uAspect")),
-          affine(shader.uniform("uAffine")) {}
+          affine(shader.uniform("uAffine")), opacity(shader.uniform("uOpacity")) {}
 };
 
 struct RippleProgram {

@@ -12,6 +12,7 @@ uniform float uTime;
 uniform float uSpawnTime;
 uniform vec3 uRippleColor;
 uniform float uAspect;
+uniform float uOpacity;
 uniform bool uExtruded;
 uniform float uOutlinePixels;
 uniform vec3 uSunDir;
@@ -53,7 +54,7 @@ void main() {
     if (uExtruded) {
         vec4 item = shadeItem(tc, texColor);
         if (vSide < 0.5 && texColor.a < 0.1) { discard; }
-        FragColor = vec4(distanceFog(item.rgb), item.a);
+        FragColor = vec4(distanceFog(item.rgb), item.a * clamp(uOpacity, 0.0, 1.0));
         return;
     }
     float alpha = step(0.1, texColor.a);
@@ -80,5 +81,5 @@ void main() {
     vec3 outlineColor = uRippleColor + vec3(0.30);
     vec3 finalColor = texColor.rgb * 1.35 + outlineColor * outline * (0.55 + 1.35 * ripple);
 
-    FragColor = vec4(distanceFog(finalColor), 1.0);
+    FragColor = vec4(distanceFog(finalColor), clamp(uOpacity, 0.0, 1.0));
 }

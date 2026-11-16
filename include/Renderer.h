@@ -36,6 +36,11 @@ class Renderer {
     int developerIconHitTest(int x, int y) const;
     void clickDeveloperIcon(int icon, bool doubleClick = false) const;
     void renderMenu(float time, int selection, int pressed = -1, int score = 0, int healthyFoods = 0) const;
+    void renderGameOver(float playerX, float roadScroll, float gameTime, int score,
+                        std::span<const Entity> entities, std::span<const CollectEffect> collectEffects,
+                        float nightBlend, float cameraBlend, int health, int healthyFoods,
+                        float controlsHelpAlpha, float transitionTime,
+                        int selection, int pressed = -1) const;
     void render(float playerX, float roadScroll, float gameTime, int score, std::span<const Entity> entities,
                 std::span<const CollectEffect> collectEffects, float effectRemainder = 0, float nightBlend = 0,
                 float playerSpeed = 0, float cameraBlend = 1, int health = GameConfig::kMaxHealth,

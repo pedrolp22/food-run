@@ -40,4 +40,8 @@ class Game {
     _SDL_GameController* controller_ = nullptr;
     bool controlsHelpShown_ = false;
     float controlsHelpElapsed_ = 0;
+    bool gameOverTransitionActive_ = false;
+    bool gameOverInteractive_ = false;
+    float gameOverElapsed_ = 0;
+    float gameOverCameraBlend_ = 1;
 };

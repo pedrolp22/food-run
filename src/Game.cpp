@@ -30,6 +30,31 @@ int Game::run() {
         }
         if (controlsHelpShown_ && controlsHelpElapsed_ < 7.0f)
             controlsHelpElapsed_ = std::min(7.0f, controlsHelpElapsed_ + std::max(elapsed, 0.0f));
+        if (gameOverTransitionActive_) {
+            const float transitionDuration = GameConfig::kGameOverHudFadeSeconds + GameConfig::kGameOverPanelDropSeconds;
+            gameOverElapsed_ = std::min(gameOverElapsed_ + std::max(elapsed, 0.0f), transitionDuration);
+            if (gameOverElapsed_ >= transitionDuration) {
+                gameOverInteractive_ = true;
+                inMenu_ = true;
+            }
+            if (inMenu_ && menuPendingActivation_ >= 0) {
+                menuClickRemaining_ -= std::max(elapsed, 0.0f);
+                if (menuClickRemaining_ <= 0) {
+                    menuSelection_ = menuPendingActivation_;
+                    menuPendingActivation_ = -1;
+                    menuMouseDown_ = -1;
+                    activateMenuSelection();
+                    if (!gameOverTransitionActive_ || !running_)
+                        continue;
+                }
+            }
+            const auto& state = simulation_.state();
+            renderer_.renderGameOver(state.playerX, state.roadScroll, state.time, state.score, state.entities,
+                                     state.collectEffects, state.dayNight.nightBlend(0), gameOverCameraBlend_, state.health,
+                                     state.healthyFoods, controlsHelpAlpha(), gameOverElapsed_, menuSelection_,
+                                     menuMouseDown_ == menuMouseHover_ ? menuMouseDown_ : -1);
+            continue;
+        }
         if (inMenu_) {
             menuTime += std::max(elapsed, 0.0f);
             if (menuPendingActivation_ >= 0) {
@@ -58,8 +83,10 @@ int Game::run() {
         clock_.advance(elapsed, [this](float dt) { simulation_.update(dt); });
         const auto& state = simulation_.state();
         if (state.gameOver) {
-            inMenu_ = true;
-            menuTime = 0;
+            gameOverTransitionActive_ = true;
+            gameOverInteractive_ = false;
+            gameOverElapsed_ = 0;
+            gameOverCameraBlend_ = cameraBlend;
             showMenuPage(Renderer::MenuPage::GameOver);
             continue;
         }
@@ -80,6 +107,8 @@ void Game::handleEvents() {
             running_ = false;
             continue;
         }
+        if (gameOverTransitionActive_ && !gameOverInteractive_)
+            continue;
         if (inMenu_ && (event.type == SDL_MOUSEMOTION || event.type == SDL_MOUSEBUTTONDOWN ||
                         event.type == SDL_MOUSEBUTTONUP)) {
             if (menuPendingActivation_ >= 0)
@@ -237,6 +266,8 @@ void Game::backMenu() {
     case Page::Credits: showMenuPage(Page::Main, 2); break;
     case Page::Options: showMenuPage(Page::Main, 1); break;
     case Page::GameOver:
+        gameOverTransitionActive_ = false;
+        gameOverInteractive_ = false;
         resetGame();
         showMenuPage(Page::Main);
         break;
@@ -254,6 +285,8 @@ void Game::activateMenuSelection() {
     if (menuPage_ == Page::GameOver) {
         switch (menuSelection_) {
         case 0:
+            gameOverTransitionActive_ = false;
+            gameOverInteractive_ = false;
             resetGame();
             showMenuPage(Page::Main);
             inMenu_ = false;
@@ -261,10 +294,11 @@ void Game::activateMenuSelection() {
             cameraTransitionActive_ = true;
             break;
         case 1:
+            gameOverTransitionActive_ = false;
+            gameOverInteractive_ = false;
             resetGame();
             showMenuPage(Page::Main);
             break;
-        case 2: running_ = false; break;
         }
         return;
     }
