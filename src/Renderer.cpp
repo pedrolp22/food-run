@@ -1009,7 +1009,8 @@ void Renderer::renderGameOver(const float playerX, const float roadScroll, const
                               const std::span<const Entity> entities,
                               const std::span<const CollectEffect> collectEffects, const float nightBlend,
                               const float cameraBlend, const int health, const int healthyFoods,
-                              const float controlsHelpAlpha, const float transitionTime,
+                              const game::GameOverReason deathReason, const float controlsHelpAlpha,
+                              const float transitionTime,
                               const int selection, const int pressed) const {
     if (!impl_)
         return;
@@ -1025,8 +1026,9 @@ void Renderer::renderGameOver(const float playerX, const float roadScroll, const
     const float panelProgress = panelLinear * panelLinear * (3.0f - 2.0f * panelLinear);
     const float panelOffsetY = (1.0f - panelProgress) * 2.15f;
 
+    const float deathProgress = std::clamp(elapsed / GameConfig::kPlayerDeathAnimationSeconds, 0.0f, 1.0f);
     const auto& scene = impl_->world.build(playerX, roadScroll, gameTime, entities, collectEffects, 0,
-                                           nightBlend, 0, cameraBlend, impl_->aspect());
+                                           nightBlend, 0, cameraBlend, impl_->aspect(), deathReason, deathProgress);
     impl_->updateScoreText(score, health, healthyFoods, controlsHelpAlpha, hudOpacity);
     impl_->updateMenuSelection(selection, pressed, elapsed);
     std::vector<engine::graphics::DrawCommand> overlay = impl_->hudObjects;

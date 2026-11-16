@@ -23,6 +23,7 @@ void resolveCollisions(GameState& state) {
         switch (entity->type) {
         case EntityType::Obstacle:
             state.gameOver = true;
+            state.gameOverReason = GameOverReason::Obstacle;
             ++entity;
             continue;
         case EntityType::SlowCollectible:
@@ -31,6 +32,7 @@ void resolveCollisions(GameState& state) {
             state.speed = std::max(kMinSpeed, state.speed - 1.8f);
             if (state.health == 0) {
                 state.gameOver = true;
+                state.gameOverReason = GameOverReason::UnhealthyFood;
             }
             state.collectEffects.push_back(
                 {entity->type, entity->lane, entity->z, state.time, entity->textureIndex, entity->spawnTime});

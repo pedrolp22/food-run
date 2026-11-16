@@ -51,7 +51,7 @@ int Game::run() {
             const auto& state = simulation_.state();
             renderer_.renderGameOver(state.playerX, state.roadScroll, state.time, state.score, state.entities,
                                      state.collectEffects, state.dayNight.nightBlend(0), gameOverCameraBlend_, state.health,
-                                     state.healthyFoods, controlsHelpAlpha(), gameOverElapsed_, menuSelection_,
+                                     state.healthyFoods, state.gameOverReason, controlsHelpAlpha(), gameOverElapsed_, menuSelection_,
                                      menuMouseDown_ == menuMouseHover_ ? menuMouseDown_ : -1);
             continue;
         }

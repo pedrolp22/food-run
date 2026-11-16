@@ -86,7 +86,8 @@ void WorldScene::setOverlayObjects(std::span<const DrawCommand> objects) {
 }
 const Scene& WorldScene::build(float playerX, float roadScroll, float gameTime, std::span<const Entity> entities,
                                std::span<const CollectEffect> effects, float effectRemainder, float nightBlend,
-                               float playerSpeed, float cameraBlend, float aspect) {
+                               float playerSpeed, float cameraBlend, float aspect, GameOverReason deathReason,
+                               float deathProgress) {
     const float cameraT = std::clamp(cameraBlend, 0.0f, 1.0f);
     const float easedCameraT = cameraT * cameraT * (3.0f - 2.0f * cameraT);
     const auto blend = [easedCameraT](float from, float to) { return std::lerp(from, to, easedCameraT); };
@@ -138,6 +139,7 @@ const Scene& WorldScene::build(float playerX, float roadScroll, float gameTime, 
     if (foliageParticles_)
         addLeaves(playerX, roadScroll);
     player_.update(playerX, roadScroll + std::max(playerSpeed, 0.f) * effectRemainder, gameTime, playerSpeed);
+    player_.updateDeath(deathReason, deathProgress);
     const auto& pose = player_.pose();
     const auto anchor = player_.anchor();
     const float groundY = pose.boundsCenter().y - pose.boundsHalfExtent().y;
@@ -149,8 +151,10 @@ const Scene& WorldScene::build(float playerX, float roadScroll, float gameTime, 
     character.pbrSurface = true;
     character.pose = &pose;
     character.transform =
-        multiply(translation({playerX + track_.offset(kPlayerZ), -track_.drop(kPlayerZ) + player_.lift(), kPlayerZ}),
-                 multiply(rotateY(characterYaw), translation({-anchor.x, -groundY, -anchor.z})));
+        multiply(translation({playerX + track_.offset(kPlayerZ), -track_.drop(kPlayerZ) + player_.lift(),
+                              kPlayerZ + player_.backward()}),
+                 multiply(rotateY(characterYaw),
+                          translation({-anchor.x, -groundY, -anchor.z})));
     scene_.objects.emplace_back(character);
     addStreetLamps(roadScroll);
     addDecor();

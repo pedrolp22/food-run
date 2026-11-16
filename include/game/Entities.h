@@ -2,6 +2,7 @@
 
 namespace game {
 enum class EntityType { Obstacle, SlowCollectible, ScoreCollectible };
+enum class GameOverReason { None, Obstacle, UnhealthyFood };
 struct Entity {
     EntityType type = EntityType::Obstacle;
     int lane = 1;

@@ -39,7 +39,7 @@ class Renderer {
     void renderGameOver(float playerX, float roadScroll, float gameTime, int score,
                         std::span<const Entity> entities, std::span<const CollectEffect> collectEffects,
                         float nightBlend, float cameraBlend, int health, int healthyFoods,
-                        float controlsHelpAlpha, float transitionTime,
+                        game::GameOverReason deathReason, float controlsHelpAlpha, float transitionTime,
                         int selection, int pressed = -1) const;
     void render(float playerX, float roadScroll, float gameTime, int score, std::span<const Entity> entities,
                 std::span<const CollectEffect> collectEffects, float effectRemainder = 0, float nightBlend = 0,

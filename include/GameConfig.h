@@ -34,6 +34,7 @@ constexpr std::array<float, 3> kMenuLightDirection = {-.65f, 1.8f, 1.0f};
 constexpr float kCameraTransitionSeconds = 1.4f;
 constexpr float kGameOverHudFadeSeconds = .55f;
 constexpr float kGameOverPanelDropSeconds = .85f;
+constexpr float kPlayerDeathAnimationSeconds = 1.0f;
 constexpr float kMenuCatX = kLanePositions[kLaneCount / 2];
 constexpr float kMenuCatZ = kPlayerZ;
 constexpr float kLaneChangeSpeed = 12.0f;

@@ -8,6 +8,7 @@
 namespace game {
 struct GameState {
     bool gameOver = false;
+    GameOverReason gameOverReason = GameOverReason::None;
     int targetLane = 1;
     float playerX = GameConfig::kLanePositions[1];
     float speed = GameConfig::kInitialSpeed;

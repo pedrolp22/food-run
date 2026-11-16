@@ -207,6 +207,92 @@ void PlayerCharacter::rotate(const Joint& joint, float x, float y, float z) {
     const auto offset = multiply(rotation(joint.z, z), multiply(rotation(joint.x, x), rotation(joint.y, y)));
     pose_.setLocal(joint.node, multiply(pose_.data().nodes[joint.node].localBind, offset));
 }
+void PlayerCharacter::rotateFrom(const Joint& joint, const Mat4& base, float x, float y, float z) {
+    const auto offset = multiply(rotation(joint.z, z), multiply(rotation(joint.x, x), rotation(joint.y, y)));
+    pose_.setLocal(joint.node, multiply(base, offset));
+}
+void PlayerCharacter::clearDeath() {
+    deathStarted_ = false;
+    deathReason_ = GameOverReason::None;
+    deathStartLocals_.clear();
+    backward_ = 0;
+}
+void PlayerCharacter::updateDeath(GameOverReason reason, float progress) {
+    if (reason == GameOverReason::None) {
+        clearDeath();
+        return;
+    }
+    if (!deathStarted_ || deathReason_ != reason) {
+        deathStartLocals_.resize(pose_.data().nodes.size());
+        for (std::size_t node = 0; node < deathStartLocals_.size(); ++node)
+            deathStartLocals_[node] = pose_.local(static_cast<int>(node));
+        deathReason_ = reason;
+        deathStarted_ = true;
+    }
+    const float t = std::clamp(std::isfinite(progress) ? progress : 0.0f, 0.0f, 1.0f);
+    const auto ease = [](float value) {
+        const float x = std::clamp(value, 0.0f, 1.0f);
+        return x * x * (3.0f - 2.0f * x);
+    };
+    pose_.reset();
+    for (std::size_t node = 0; node < deathStartLocals_.size(); ++node)
+        pose_.setLocal(static_cast<int>(node), deathStartLocals_[node]);
+
+    if (reason == GameOverReason::UnhealthyFood) {
+        const float reach = ease(t / .36f);
+        const float fall = ease((t - .22f) / .78f);
+        rotateFrom(root_, deathStartLocals_[root_.node], 0, 0, radians(74) * fall);
+        rotateFrom(head_, deathStartLocals_[head_.node], 0, 0, -radians(15) * fall);
+        for (int side = 0; side < 2; ++side) {
+            const float sign = side == 0 ? 1.0f : -1.0f;
+            rotateFrom(shoulders_[side], deathStartLocals_[shoulders_[side].node],
+                       sign * radians(70) * reach, sign * radians(16) * reach);
+            rotateFrom(elbows_[side], deathStartLocals_[elbows_[side].node], 0,
+                       sign * radians(48) * reach);
+            rotateFrom(wrists_[side], deathStartLocals_[wrists_[side].node], 0,
+                       -sign * radians(12) * reach);
+            rotateFrom(thighs_[side], deathStartLocals_[thighs_[side].node], 0, 0,
+                       sign * radians(14) * fall);
+            rotateFrom(knees_[side], deathStartLocals_[knees_[side].node], 0, 0,
+                       radians(18) * fall);
+        }
+        for (std::size_t i = 0; i < tail_.size(); ++i) {
+            const float taper = 1.0f - .07f * static_cast<float>(i);
+            rotateFrom(tail_[i], deathStartLocals_[tail_[i].node], 0,
+                       radians(14) * fall * taper, radians(8) * fall * taper);
+        }
+        backward_ = .12f * fall;
+        lift_ = .08f * std::sin(kPi * t);
+    } else {
+        const float launch = ease(t / .32f);
+        const float fall = ease((t - .18f) / .82f);
+        const float tumble = std::sin(kPi * t);
+        rotateFrom(root_, deathStartLocals_[root_.node], radians(16) * tumble, 0,
+                   radians(88) * fall);
+        rotateFrom(head_, deathStartLocals_[head_.node], 0, 0, -radians(12) * fall);
+        for (int side = 0; side < 2; ++side) {
+            const float sign = side == 0 ? 1.0f : -1.0f;
+            rotateFrom(shoulders_[side], deathStartLocals_[shoulders_[side].node],
+                       sign * radians(38) * launch, -sign * radians(14) * launch);
+            rotateFrom(elbows_[side], deathStartLocals_[elbows_[side].node], 0,
+                       -sign * radians(32) * launch);
+            rotateFrom(wrists_[side], deathStartLocals_[wrists_[side].node], 0,
+                       sign * radians(10) * launch);
+            rotateFrom(thighs_[side], deathStartLocals_[thighs_[side].node], 0, 0,
+                       -sign * radians(24) * launch);
+            rotateFrom(knees_[side], deathStartLocals_[knees_[side].node], 0, 0,
+                       radians(38) * launch);
+        }
+        for (std::size_t i = 0; i < tail_.size(); ++i) {
+            const float taper = 1.0f - .07f * static_cast<float>(i);
+            rotateFrom(tail_[i], deathStartLocals_[tail_[i].node], radians(20) * tumble * taper,
+                       -radians(24) * launch * taper, radians(10) * fall * taper);
+        }
+        backward_ = 1.15f * ease(t);
+        lift_ = .72f * std::sin(kPi * t);
+    }
+    pose_.evaluate();
+}
 void PlayerCharacter::update(float playerX, float distance, float time, float speed) {
     if (!std::isfinite(playerX) || !std::isfinite(distance) || !std::isfinite(time) || !std::isfinite(speed)) {
         throw std::invalid_argument("Non-finite player animation input");

@@ -22,7 +22,8 @@ class WorldScene {
     const engine::graphics::Scene& build(float playerX, float roadScroll, float gameTime,
                                          std::span<const Entity> entities, std::span<const CollectEffect> effects,
                                          float effectRemainder = 0, float nightBlend = 0, float playerSpeed = 0,
-                                         float cameraBlend = 1, float aspect = 1);
+                                         float cameraBlend = 1, float aspect = 1,
+                                         GameOverReason deathReason = GameOverReason::None, float deathProgress = 0);
 
   private:
     enum class Face { FrontBack, Side, Top };

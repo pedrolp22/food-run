@@ -13,6 +13,7 @@ class ModelPose {
     const ModelData& data() const { return data_; }
     void reset();
     void setLocal(int node, const math::Mat4& transform);
+    const math::Mat4& local(int node) const { return locals_.at(node); }
     void evaluate();
     const math::Mat4& world(int node) const { return worlds_.at(node); }
     const math::Mat4& primitiveTransform(std::size_t primitive) const { return primitiveTransforms_.at(primitive); }
