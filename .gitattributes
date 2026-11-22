@@ -1,0 +1,16 @@
+* text=auto
+*.cpp text eol=lf
+*.h text eol=lf
+*.c text eol=lf
+*.cmake text eol=lf
+*.md text eol=lf
+*.py text eol=lf
+*.yml text eol=lf
+*.json text eol=lf
+*.vert text eol=lf
+*.frag text eol=lf
+*.png binary
+*.bin binary
+*.zip binary
+# Preserve upstream license text verbatim, including its whitespace.
+external/licenses/* -whitespace

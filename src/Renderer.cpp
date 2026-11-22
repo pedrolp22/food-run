@@ -935,8 +935,11 @@ Renderer::Renderer(std::filesystem::path assetRoot, std::filesystem::path settin
         char* base = SDL_GetBasePath();
         const std::filesystem::path folder = base ? std::filesystem::path(reinterpret_cast<const char8_t*>(base)) : std::filesystem::current_path();
         SDL_free(base);
-        assetRoot_ = std::filesystem::is_directory(folder / "assets") ? folder / "assets" :
-                     std::filesystem::path(SUBWAY_ASSET_DIR);
+        assetRoot_ = folder / "assets";
+#ifndef SUBWAY_PORTABLE_RELEASE
+        if (!std::filesystem::is_directory(assetRoot_))
+            assetRoot_ = std::filesystem::path(SUBWAY_ASSET_DIR);
+#endif
     }
     if (settingsFile_.empty())
         settingsFile_ = assetRoot_.parent_path() / "game.cfg";

@@ -1,4 +1,5 @@
 #include "Game.h"
+#include "GameConfig.h"
 #include "TestSupport.h"
 #include <SDL.h>
 #include <glad/glad.h>
@@ -16,7 +17,7 @@ namespace {
 SDL_Window* gameWindow() {
     for (unsigned id = 1; id < 256; ++id) {
         if (auto* window = SDL_GetWindowFromID(id); window &&
-            std::strncmp(SDL_GetWindowTitle(window), "Teste", 5) == 0)
+            std::strcmp(SDL_GetWindowTitle(window), GameConfig::kWindowTitle) == 0)
             return window;
     }
     return nullptr;
@@ -26,7 +27,7 @@ struct MenuTargets {
     std::array<std::array<float, 2>, 3> icons;
 };
 MenuTargets menuHitChecks(const std::filesystem::path& config) {
-    Renderer renderer({}, config, false);
+    Renderer renderer(TEST_ASSET_DIR, config, false);
     CHECK(renderer.initialize());
     for (int i = 0; i < 8; ++i) {
         SDL_PumpEvents();
@@ -38,7 +39,7 @@ MenuTargets menuHitChecks(const std::filesystem::path& config) {
         CHECK(renderer.menuItemCount() == itemCount);
         int width = 0, height = 0;
         SDL_GetWindowSize(window, &width, &height);
-        std::array<int, 13> count{}, sumX{}, sumY{};
+        std::array<int, 14> count{}, sumX{}, sumY{};
         for (int y = 0; y < height; y += 5) {
             for (int x = 0; x < width; x += 5) {
                 const int hit = renderer.menuHitTest(x, y);
@@ -50,7 +51,7 @@ MenuTargets menuHitChecks(const std::filesystem::path& config) {
                 }
             }
         }
-        std::array<std::array<float, 2>, 13> centers{};
+        std::array<std::array<float, 2>, 14> centers{};
         for (int i = 0; i < itemCount; ++i) {
             CHECK(count[i] > 3); // Every control is visible and reachable on this one page.
             CHECK(renderer.menuHitTest(sumX[i] / count[i], sumY[i] / count[i]) == i);
@@ -118,59 +119,60 @@ MenuTargets menuHitChecks(const std::filesystem::path& config) {
     renderer.setMenuPage(Page::Options);
     CHECK(renderer.developerIconHitTest(int(icons[0][0] * 720), int(icons[0][1] * 1280)) == -1);
     renderer.renderMenu(.5f, 0);
-    checkLayout(13);
-    CHECK(renderer.menuItemValue(0) == "High");
-    CHECK(renderer.adjustMenuItem(0));
-    CHECK(renderer.menuItemValue(0) == "Low");
+    checkLayout(14);
+    CHECK(renderer.menuItemValue(0) == "Windowed");
+    CHECK(renderer.menuItemValue(1) == "High");
+    CHECK(renderer.adjustMenuItem(1));
+    CHECK(renderer.menuItemValue(1) == "Low");
     CHECK(game::GraphicsSettings::load(config).renderScale == 50);
-    CHECK(renderer.adjustMenuItem(0) && renderer.adjustMenuItem(0));
-    CHECK(renderer.menuItemValue(0) == "High");
-    CHECK(renderer.adjustMenuItem(1, -1));
+    CHECK(renderer.adjustMenuItem(1) && renderer.adjustMenuItem(1));
+    CHECK(renderer.menuItemValue(1) == "High");
+    CHECK(renderer.adjustMenuItem(2, -1));
     CHECK(renderer.graphicsSettings().renderScale == 75);
-    CHECK(renderer.adjustMenuItem(2));
+    CHECK(renderer.adjustMenuItem(3));
     CHECK(renderer.graphicsSettings().antiAliasing);
-    CHECK(renderer.adjustMenuItem(4));
-    CHECK(renderer.graphicsSettings().shadows == game::GraphicsQuality::Off);
     CHECK(renderer.adjustMenuItem(5));
-    CHECK(!renderer.graphicsSettings().ambientOcclusion);
+    CHECK(renderer.graphicsSettings().shadows == game::GraphicsQuality::Off);
     CHECK(renderer.adjustMenuItem(6));
+    CHECK(!renderer.graphicsSettings().ambientOcclusion);
+    CHECK(renderer.adjustMenuItem(7));
     CHECK(renderer.graphicsSettings().reflections == game::GraphicsQuality::Off);
-    CHECK(renderer.adjustMenuItem(7) && renderer.adjustMenuItem(8));
+    CHECK(renderer.adjustMenuItem(8) && renderer.adjustMenuItem(9));
     CHECK(!renderer.graphicsSettings().materialDetail && !renderer.graphicsSettings().foliageParticles);
-    CHECK(renderer.adjustMenuItem(9) && renderer.adjustMenuItem(10) && renderer.adjustMenuItem(11));
+    CHECK(renderer.adjustMenuItem(10) && renderer.adjustMenuItem(11) && renderer.adjustMenuItem(12));
     const auto saved = game::GraphicsSettings::load(config);
     CHECK(saved.retroMode && saved.ditheredShadows && !saved.distanceFog && saved.antiAliasing);
-    renderer.renderMenu(.6f, 9);
+    renderer.renderMenu(.6f, 10);
     CHECK(!glIsEnabled(GL_DITHER)); // The menu must use the actual retro pipeline.
-    checkLayout(13);
-    CHECK(renderer.adjustMenuItem(9) && renderer.adjustMenuItem(10) && renderer.adjustMenuItem(11));
-    CHECK(renderer.menuItemValue(0) == "Custom");
-    CHECK(renderer.adjustMenuItem(0, -1) && renderer.adjustMenuItem(0));
-    CHECK(renderer.menuItemValue(0) == "High");
+    checkLayout(14);
+    CHECK(renderer.adjustMenuItem(10) && renderer.adjustMenuItem(11) && renderer.adjustMenuItem(12));
+    CHECK(renderer.menuItemValue(1) == "Custom");
+    CHECK(renderer.adjustMenuItem(1, -1) && renderer.adjustMenuItem(1));
+    CHECK(renderer.menuItemValue(1) == "High");
     for (const auto size : {std::array{1000, 650}, std::array{720, 964}}) {
         SDL_SetWindowSize(window, size[0], size[1]);
         for (int retro = 0; retro <= 1; ++retro) {
             renderer.setMenuPage(Page::Options);
             if (retro)
-                CHECK(renderer.adjustMenuItem(9));
+                CHECK(renderer.adjustMenuItem(10));
             for (const auto page : {Page::Options, Page::Main, Page::Credits}) {
                 renderer.setMenuPage(page);
                 SDL_PumpEvents();
                 renderer.renderMenu(1.0f + retro, 0);
                 CHECK(bool(glIsEnabled(GL_DITHER)) == !retro);
-                const auto centers = checkLayout(page == Page::Options ? 13 : page == Page::Main ? 4 : 1);
+                const auto centers = checkLayout(page == Page::Options ? 14 : page == Page::Main ? 4 : 1);
                 if (page == Page::Credits)
                     checkIcons();
                 if (page == Page::Options) {
                     // Extra is a heading between Particles and Retro mode, not another submenu.
-                    const int x = int((centers[8][0] + centers[9][0]) * .5f * size[0]);
-                    const int y = int((centers[8][1] + centers[9][1]) * .5f * size[1]);
+                    const int x = int((centers[9][0] + centers[10][0]) * .5f * size[0]);
+                    const int y = int((centers[9][1] + centers[10][1]) * .5f * size[1]);
                     CHECK(renderer.menuHitTest(x, y) == -1);
                 }
             }
         }
         renderer.setMenuPage(Page::Options);
-        CHECK(renderer.adjustMenuItem(9)); // Restore normal presentation for the next size.
+        CHECK(renderer.adjustMenuItem(10)); // Restore normal presentation for the next size.
     }
     return {main[0], main[1], main[2], credits[0], icons};
 }
@@ -194,7 +196,7 @@ int main() {
     const auto targets = menuHitChecks(config);
     std::atomic<bool> mouseStartedGame = false, settingsApplied = false, shortcutsRemoved = false;
     {
-        Game game(config, false);
+        Game game(config, false, TEST_ASSET_DIR);
         std::jthread input([&](std::stop_token stop) {
             const auto waitFor = [&](const auto& predicate) {
                 const auto deadline = std::chrono::steady_clock::now() + 5s;
@@ -242,7 +244,7 @@ int main() {
                 event.wheel.y = steps;
                 SDL_PushEvent(&event);
             };
-            wheel(-1); // Render scale, directly below Quality.
+            wheel(-2); // Skip Display mode and Quality to reach Render scale.
             key(SDLK_LEFT); // 100% -> 75%.
             wheel(-7); // Particles.
             SDL_Event heldDown{};
@@ -266,18 +268,34 @@ int main() {
             key(SDLK_RETURN); // Returning keeps Credits selected.
             key(SDLK_RETURN); // Back.
             click(targets.play);
-            mouseStartedGame = waitFor([&] { return std::strstr(SDL_GetWindowTitle(window), "Score") != nullptr; });
+            std::this_thread::sleep_for(300ms);
+            // If Play did not activate, this sequence would open Options and
+            // change render scale. During gameplay it must leave settings intact.
+            key(SDLK_DOWN);
+            key(SDLK_RETURN);
+            wheel(-2);
+            key(SDLK_LEFT);
+            std::this_thread::sleep_for(200ms);
+            mouseStartedGame = game::GraphicsSettings::load(config).renderScale == 75;
             key(SDLK_g);
             key(SDLK_f);
             key(SDLK_h);
             std::this_thread::sleep_for(200ms);
-            shortcutsRemoved = std::strstr(SDL_GetWindowTitle(window), "PSX") != nullptr &&
+            shortcutsRemoved = std::strcmp(SDL_GetWindowTitle(window), GameConfig::kWindowTitle) == 0 &&
                 game::GraphicsSettings::load(config).retroMode;
-            for (auto code : {SDLK_RIGHT, SDLK_r, SDLK_LEFT, SDLK_ESCAPE}) {
+            for (auto code : {SDLK_RIGHT, SDLK_r, SDLK_LEFT}) {
                 if (stop.stop_requested())
                     return;
                 key(code);
                 std::this_thread::sleep_for(40ms);
+            }
+            // Slow first frames can leave Play's click animation pending while
+            // this thread queues input. Escape is deliberately ignored during
+            // that transition, so retry until the game loop acknowledges exit.
+            const auto exitDeadline = std::chrono::steady_clock::now() + 10s;
+            while (!stop.stop_requested() && std::chrono::steady_clock::now() < exitDeadline) {
+                key(SDLK_ESCAPE);
+                std::this_thread::sleep_for(100ms);
             }
         });
         result = game.run();

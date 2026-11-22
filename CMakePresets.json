@@ -1,0 +1,38 @@
+{
+    "version": 2,
+    "cmakeMinimumRequired": { "major": 3, "minor": 20, "patch": 0 },
+    "configurePresets": [
+        {
+            "name": "release",
+            "displayName": "Portable release (Ninja)",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/release",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "SUBWAY_PORTABLE_RELEASE": "ON",
+                "SUBWAY_BUILD_TESTS": "ON"
+            }
+        },
+        {
+            "name": "headless",
+            "displayName": "CPU tests without SDL or OpenGL",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/headless",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "SUBWAY_BUILD_GRAPHICS": "OFF",
+                "SUBWAY_BUILD_PLATFORM": "OFF",
+                "SUBWAY_BUILD_GAME": "OFF",
+                "SUBWAY_BUILD_TESTS": "ON"
+            }
+        }
+    ],
+    "buildPresets": [
+        { "name": "release", "configurePreset": "release", "configuration": "Release" },
+        { "name": "headless", "configurePreset": "headless" }
+    ],
+    "testPresets": [
+        { "name": "release", "configurePreset": "release", "configuration": "Release", "output": { "outputOnFailure": true } },
+        { "name": "headless", "configurePreset": "headless", "output": { "outputOnFailure": true } }
+    ]
+}

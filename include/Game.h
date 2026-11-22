@@ -10,8 +10,9 @@ struct _SDL_GameController;
 // Application shell: input, timing, presentation. Simulation contains the game rules.
 class Game {
   public:
-    explicit Game(std::filesystem::path settingsFile = {}, bool visible = true)
-        : renderer_({}, std::move(settingsFile), visible) {}
+    explicit Game(std::filesystem::path settingsFile = {}, bool visible = true,
+                  std::filesystem::path assetRoot = {})
+        : renderer_(std::move(assetRoot), std::move(settingsFile), visible) {}
     ~Game();
     int run();
 

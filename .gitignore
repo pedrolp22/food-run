@@ -1,0 +1,17 @@
+/build*/
+/cmake-build-*/
+/out/
+/dist/
+/releases/
+/.idea/
+/CMakeUserPresets.json
+/compile_commands.json
+assets/**/.cooked/
+/game.cfg
+/game.cfg.tmp
+__pycache__/
+*.py[cod]
+.DS_Store
+Thumbs.db
+*.swp
+*.user
